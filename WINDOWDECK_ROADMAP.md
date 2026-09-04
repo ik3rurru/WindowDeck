@@ -2,8 +2,6 @@
 
 ## Hoja de ruta técnica para desarrollar una segunda pantalla entre Windows 11 y Steam Deck
 
-> Documento de contexto y ejecución para Codex.
-
 ## 1. Visión del proyecto
 
 WindowDeck permitirá utilizar la pantalla de una Steam Deck como un monitor secundario real de un PC con Windows 11.
@@ -655,9 +653,9 @@ WindowDeck 0.1 estará terminado cuando:
 - Los tests automatizados y lints pasen.
 - Las limitaciones conocidas estén publicadas.
 
-## 15. Primer bloque de trabajo para Codex
+## 15. Primer bloque de trabajo
 
-Codex debe comenzar exclusivamente por el Hito 0 y la parte mínima del Hito 1. No debe empezar todavía el driver IddCx ni la captura real.
+El desarrollo debe comenzar exclusivamente por el Hito 0 y la parte mínima del Hito 1. No debe empezar todavía el driver IddCx ni la captura real.
 
 ### Entregables de la primera iteración
 
@@ -672,7 +670,7 @@ Codex debe comenzar exclusivamente por el Hito 0 y la parte mínima del Hito 1. 
 9. Añadir tests para mensajes válidos, truncados, sobredimensionados y con versión incompatible.
 10. Documentar cómo ejecutar ambos procesos en dos ordenadores de la misma red.
 
-### Restricciones para Codex
+### Restricciones de desarrollo
 
 - Presentar un plan breve antes de modificar archivos.
 - Inspeccionar el repositorio antes de crear estructura.

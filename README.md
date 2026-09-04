@@ -35,3 +35,7 @@ cargo test --workspace
 ```
 
 Consulta [la hoja de ruta](WINDOWDECK_ROADMAP.md) para conocer el alcance y los hitos.
+
+## Licencia
+
+Disponible bajo licencia MIT o Apache 2.0, a elección del usuario.
