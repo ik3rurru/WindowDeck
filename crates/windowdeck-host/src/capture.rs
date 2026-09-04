@@ -22,7 +22,7 @@ use windows_capture::settings::{
 };
 
 pub(super) const ENCODE_FPS: u32 = 60;
-const ENCODE_BITRATE: u32 = 4_000_000;
+const ENCODE_BITRATE: u32 = 8_000_000;
 const ENCODE_FRAMES: u64 = 60;
 
 struct CaptureProbe;
@@ -228,7 +228,7 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
             "-g",
             &ENCODE_FPS.to_string(),
             "-b:v",
-            "4M",
+            &ENCODE_BITRATE.to_string(),
             "-pix_fmt",
             "yuv420p",
             "-f",

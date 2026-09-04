@@ -27,6 +27,16 @@ Prueba visual del 4 de septiembre de 2026 con el Flatpak del commit `cc113ec`, d
 | Imagen en movimiento | Limpia; recuperación inmediata al detenerse |
 | Latencia visual percibida | Molesta |
 
+Prueba del commit `0f55519` a 60 FPS y 4 Mbps, durante 227 segundos por la misma red Wi-Fi:
+
+| Medida | Resultado |
+| --- | ---: |
+| Encoder | 59,24 FPS, velocidad 1,0× |
+| Envío y recepción | 4,23 Mbps estables |
+| Fluidez | Mejora visible respecto a 30 FPS |
+| Imagen en videojuegos | Borrosa en algunos movimientos rápidos |
+| Latencia visual percibida | Notable; sin mejora respecto a la prueba anterior |
+
 ## Repetir en dos equipos
 
 1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.
