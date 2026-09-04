@@ -1,0 +1,12 @@
+[package]
+name = "windowdeck-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+windowdeck-protocol = { path = "../windowdeck-protocol" }
+
+[lints]
+workspace = true
