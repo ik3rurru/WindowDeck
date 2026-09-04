@@ -2,7 +2,7 @@
 
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 30 FPS, pero todavía no usa aceleración hardware ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 60 FPS, pero todavía no usa aceleración hardware ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
 
 ## Requisitos
 
@@ -55,7 +55,7 @@ Para comprobar el encoder H.264 de Windows sin guardar ni enviar el contenido de
 cargo run -p windowdeck-host -- --encode-test
 ```
 
-Puedes indicar otro monitor, por ejemplo `--encode-test 2`. La prueba codifica 60 frames a 30 FPS y 4 Mbps en memoria, muestra el tamaño resultante y termina. Usa la resolución actual de la pantalla.
+Puedes indicar otro monitor, por ejemplo `--encode-test 2`. La prueba codifica 60 frames a 60 FPS y 4 Mbps en memoria, muestra el tamaño resultante y termina. Usa la resolución actual de la pantalla.
 
 Para probar H.264 continuo a través de la red, inicia el host:
 
@@ -69,7 +69,7 @@ Y ejecuta el receptor desde el otro equipo o una segunda terminal:
 cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test
 ```
 
-FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por software a 30 FPS y 4 Mbps y envía MPEG-TS mientras la captura sigue activa. El cliente valida el orden de los paquetes y alimenta FFplay directamente, sin guardar la pantalla en disco ni crear una cola en la aplicación. Cierra la ventana para terminar y añade `--fullscreen` si quieres verla a pantalla completa.
+FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por software a 60 FPS y 4 Mbps y envía MPEG-TS mientras la captura sigue activa. El cliente valida el orden de los paquetes y alimenta FFplay directamente, sin guardar la pantalla en disco ni crear una cola en la aplicación. Cierra la ventana para terminar y añade `--fullscreen` si quieres verla a pantalla completa.
 
 Durante la sesión, `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics` muestran FPS, velocidad del encoder, bitrate, bytes y paquetes. `h264_first_packet_*` mide el arranque local de la tubería, no la latencia visual entre dos equipos. La línea base y el procedimiento reproducible están en [docs/testing.md](docs/testing.md).
 

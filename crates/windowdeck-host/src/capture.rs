@@ -21,7 +21,7 @@ use windows_capture::settings::{
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 
-pub(super) const ENCODE_FPS: u32 = 30;
+pub(super) const ENCODE_FPS: u32 = 60;
 const ENCODE_BITRATE: u32 = 4_000_000;
 const ENCODE_FRAMES: u64 = 60;
 

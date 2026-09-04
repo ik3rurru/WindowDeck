@@ -33,7 +33,7 @@ Prueba visual del 4 de septiembre de 2026 con el Flatpak del commit `cc113ec`, d
 2. Ejecutar el cliente con `cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test --fullscreen`.
 3. Mantener la sesión al menos 30 segundos y conservar los eventos `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics`.
 4. Repetir por Ethernet y Wi-Fi sin cambiar resolución, FPS ni contenido.
-5. Confirmar que el encoder se mantiene cerca de 30 FPS, que su velocidad no baja de `1.0x` de forma sostenida y que los bytes recibidos siguen creciendo sin pausas.
+5. Confirmar que el encoder se mantiene cerca de 60 FPS, que su velocidad no baja de `1.0x` de forma sostenida y que los bytes recibidos siguen creciendo sin pausas.
 
 ## Medir latencia visual
 
