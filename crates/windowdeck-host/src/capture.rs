@@ -22,7 +22,7 @@ use windows_capture::settings::{
 };
 
 pub(super) const ENCODE_FPS: u32 = 60;
-const ENCODE_BITRATE: u32 = 12_000_000;
+const ENCODE_BITRATE: u32 = 16_000_000;
 const ENCODE_FRAMES: u64 = 60;
 
 struct CaptureProbe;

@@ -39,6 +39,8 @@ Prueba del commit `0f55519` a 60 FPS y 4 Mbps, durante 227 segundos por la misma
 
 La prueba posterior del commit `99c8bbc`, con un objetivo de 8 Mbps, mostró una mejora perceptible de latencia. Persistieron artefactos en fondos de videojuego en movimiento; faltan las métricas de esa sesión para cuantificar el bitrate efectivo.
 
+La prueba del commit `84e70f3`, con un objetivo de 12 Mbps, mejoró claramente la calidad percibida. Se continúa con 16 Mbps para localizar el punto a partir del cual aumentar el bitrate deja de aportar una mejora visible.
+
 ## Repetir en dos equipos
 
 1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.
