@@ -9,5 +9,8 @@ repository.workspace = true
 windowdeck-diagnostics = { path = "../windowdeck-diagnostics" }
 windowdeck-protocol = { path = "../windowdeck-protocol" }
 
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+
 [lints]
 workspace = true

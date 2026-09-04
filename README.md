@@ -32,6 +32,14 @@ cargo run -p windowdeck-client -- IP_DEL_PC:48150 --fullscreen
 
 El cliente abre una ventana con el patrón; el número superior indica el frame y el inferior los milisegundos transcurridos en la sesión. Si el host se reinicia, la ventana permanece abierta y reconecta automáticamente. Ambos procesos imprimen métricas en la terminal. F11 alterna la pantalla completa, Escape vuelve al modo ventana y cerrar la ventana detiene el cliente. Pulsa `Ctrl+C` para detener el host.
 
+Para comprobar la captura real de la pantalla principal en Windows sin enviarla todavía por red:
+
+```powershell
+cargo run -p windowdeck-host -- --capture-test
+```
+
+Puedes añadir el índice de otro monitor, por ejemplo `--capture-test 2`. La prueba confirma la recepción de una textura D3D11 y termina tras el primer frame.
+
 ## Comprobar
 
 ```bash

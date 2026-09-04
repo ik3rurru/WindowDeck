@@ -6,6 +6,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 
+#[cfg(windows)]
+mod capture;
+
+type AnyError = Box<dyn Error + Send + Sync>;
+const DEFAULT_ADDRESS: &str = "0.0.0.0:48150";
 const WIDTH: u16 = 128;
 const HEIGHT: u16 = 80;
 const FPS: u16 = 10;
@@ -33,8 +38,54 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
-    let address = env::args().nth(1).unwrap_or_else(|| "0.0.0.0:48150".into());
+fn run() -> Result<(), AnyError> {
+    match parse_mode(env::args().skip(1))? {
+        Mode::Serve(address) => run_server(address),
+        Mode::Capture(index) => capture_test(index),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    Serve(String),
+    Capture(usize),
+}
+
+fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
+    let mut args = args.into_iter();
+    match args.next().as_deref() {
+        Some("--capture-test") => {
+            let index = args
+                .next()
+                .map(|value| value.parse().map_err(|_| "índice de monitor inválido"))
+                .transpose()?
+                .unwrap_or(1);
+            if index == 0 || args.next().is_some() {
+                return Err("usa --capture-test [N], con N mayor que cero");
+            }
+            Ok(Mode::Capture(index))
+        }
+        Some(value) if value.starts_with('-') => Err("opción desconocida"),
+        address => {
+            if args.next().is_some() {
+                return Err("solo se admite una dirección");
+            }
+            Ok(Mode::Serve(address.unwrap_or(DEFAULT_ADDRESS).into()))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn capture_test(index: usize) -> Result<(), AnyError> {
+    capture::run(index)
+}
+
+#[cfg(not(windows))]
+fn capture_test(_index: usize) -> Result<(), AnyError> {
+    Err("la captura de pantalla solo está disponible en Windows".into())
+}
+
+fn run_server(address: String) -> Result<(), AnyError> {
     let listener = TcpListener::bind(&address)?;
     emit(Level::Info, "host_listening", &[("address", &address)]);
 
@@ -167,5 +218,19 @@ mod tests {
         assert_eq!(first.len(), usize::from(WIDTH) * usize::from(HEIGHT));
         assert!(first.contains(&9));
         assert_ne!(first, pattern(1, 1_000));
+    }
+
+    #[test]
+    fn mode_accepts_server_address_or_capture_monitor() {
+        assert_eq!(
+            parse_mode(Vec::new()),
+            Ok(Mode::Serve(DEFAULT_ADDRESS.into()))
+        );
+        assert_eq!(
+            parse_mode(["--capture-test".into(), "2".into()]),
+            Ok(Mode::Capture(2))
+        );
+        assert!(parse_mode(["--capture-test".into(), "0".into()]).is_err());
+        assert!(parse_mode(["--unknown".into()]).is_err());
     }
 }
