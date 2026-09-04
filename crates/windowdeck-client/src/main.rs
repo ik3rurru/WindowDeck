@@ -11,9 +11,12 @@ use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy, OwnedDisplayHandle};
-use winit::window::{Window, WindowId};
+use winit::keyboard::{Key, NamedKey};
+use winit::window::{Fullscreen, Window, WindowId};
+
+const DEFAULT_ADDRESS: &str = "127.0.0.1:48150";
 
 fn main() {
     if let Err(error) = run() {
@@ -27,20 +30,49 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let address = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:48150".into());
-    let (stream, width, height) = connect(&address)?;
+    let options = parse_options(env::args().skip(1))?;
+    let (stream, width, height) = connect(&options.address)?;
     let shutdown = stream.try_clone()?;
     let latest = Arc::new(Mutex::new(None));
     let event_loop = EventLoop::<ClientEvent>::with_user_event().build()?;
     let worker = receive_frames(stream, Arc::clone(&latest), event_loop.create_proxy());
     let context = Context::new(event_loop.owned_display_handle())?;
-    let mut app = App::new(context, latest, shutdown, worker, width, height);
+    let mut app = App::new(
+        context,
+        latest,
+        shutdown,
+        worker,
+        width,
+        height,
+        options.fullscreen,
+    );
 
     event_loop.run_app(&mut app)?;
     app.stop()?;
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Options {
+    address: String,
+    fullscreen: bool,
+}
+
+fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'static str> {
+    let mut address = None;
+    let mut fullscreen = false;
+    for argument in args {
+        match argument.as_str() {
+            "--fullscreen" => fullscreen = true,
+            _ if argument.starts_with('-') => return Err("opción desconocida"),
+            _ if address.is_none() => address = Some(argument),
+            _ => return Err("solo se admite una dirección"),
+        }
+    }
+    Ok(Options {
+        address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
+        fullscreen,
+    })
 }
 
 fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
@@ -224,6 +256,7 @@ struct App {
     shutdown: TcpStream,
     worker: Option<JoinHandle<()>>,
     initial_size: (u16, u16),
+    start_fullscreen: bool,
 }
 
 impl App {
@@ -234,6 +267,7 @@ impl App {
         worker: JoinHandle<()>,
         width: u16,
         height: u16,
+        start_fullscreen: bool,
     ) -> Self {
         Self {
             context,
@@ -243,6 +277,7 @@ impl App {
             shutdown,
             worker: Some(worker),
             initial_size: (width, height),
+            start_fullscreen,
         }
     }
 
@@ -299,6 +334,20 @@ impl App {
             Self::fail(event_loop, &error);
         }
     }
+
+    fn toggle_fullscreen(&self) {
+        let Some(surface) = &self.surface else {
+            return;
+        };
+        let window = surface.window();
+        let enabled = window.fullscreen().is_none();
+        window.set_fullscreen(enabled.then_some(Fullscreen::Borderless(None)));
+        emit(
+            Level::Info,
+            "fullscreen_changed",
+            &[("enabled", &enabled.to_string())],
+        );
+    }
 }
 
 impl ApplicationHandler<ClientEvent> for App {
@@ -310,6 +359,10 @@ impl ApplicationHandler<ClientEvent> for App {
             (960.0 / f64::from(self.initial_size.0)).min(600.0 / f64::from(self.initial_size.1));
         let attributes = Window::default_attributes()
             .with_title("WindowDeck")
+            .with_fullscreen(
+                self.start_fullscreen
+                    .then_some(Fullscreen::Borderless(None)),
+            )
             .with_inner_size(LogicalSize::new(
                 f64::from(self.initial_size.0) * scale,
                 f64::from(self.initial_size.1) * scale,
@@ -322,7 +375,14 @@ impl ApplicationHandler<ClientEvent> for App {
             }
         };
         match Surface::new(&self.context, window) {
-            Ok(surface) => self.surface = Some(surface),
+            Ok(surface) => {
+                self.surface = Some(surface);
+                emit(
+                    Level::Info,
+                    "window_opened",
+                    &[("fullscreen", &self.start_fullscreen.to_string())],
+                );
+            }
             Err(error) => Self::fail(event_loop, &error),
         }
     }
@@ -375,6 +435,22 @@ impl ApplicationHandler<ClientEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && !event.repeat =>
+            {
+                match event.logical_key {
+                    Key::Named(NamedKey::F11) => self.toggle_fullscreen(),
+                    Key::Named(NamedKey::Escape)
+                        if self
+                            .surface
+                            .as_ref()
+                            .is_some_and(|surface| surface.window().fullscreen().is_some()) =>
+                    {
+                        self.toggle_fullscreen();
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -462,5 +538,24 @@ mod tests {
             pixels: vec![0, 1, 2],
         };
         assert!(draw_frame(&frame, 2, 2, &mut [0; 4]).is_err());
+    }
+
+    #[test]
+    fn options_accept_address_and_fullscreen_in_any_order() {
+        assert_eq!(
+            parse_options(["--fullscreen".into(), "192.0.2.1:48150".into()]),
+            Ok(Options {
+                address: "192.0.2.1:48150".into(),
+                fullscreen: true,
+            })
+        );
+        assert_eq!(
+            parse_options(Vec::new()),
+            Ok(Options {
+                address: DEFAULT_ADDRESS.into(),
+                fullscreen: false,
+            })
+        );
+        assert!(parse_options(["--unknown".into()]).is_err());
     }
 }

@@ -24,7 +24,13 @@ En SteamOS, sustituye `IP_DEL_PC` por la dirección local de Windows:
 cargo run -p windowdeck-client -- IP_DEL_PC:48150
 ```
 
-El cliente abre una ventana con el patrón y ambos procesos imprimen métricas en la terminal. Cierra la ventana para detener el cliente y pulsa `Ctrl+C` para detener el host.
+Añade `--fullscreen` para abrir directamente a pantalla completa:
+
+```bash
+cargo run -p windowdeck-client -- IP_DEL_PC:48150 --fullscreen
+```
+
+El cliente abre una ventana con el patrón y ambos procesos imprimen métricas en la terminal. F11 alterna la pantalla completa, Escape vuelve al modo ventana y cerrar la ventana detiene el cliente. Pulsa `Ctrl+C` para detener el host.
 
 ## Comprobar
 
