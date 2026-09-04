@@ -434,7 +434,7 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
-Estado actual: host y cliente negocian y reproducen una emisión H.264 continua mediante MPEG-TS, el protocolo v3 y FFplay; la prueba actual está configurada a 1280 × 800, 60 FPS y 8 Mbps. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo, conserva [mediciones reales](docs/testing.md) y genera un Flatpak provisional para Steam Deck. Los 60 FPS mejoran la fluidez, pero aún falta reducir la latencia visual y sustituir el encoder software por aceleración hardware.
+Estado actual: host y cliente negocian y reproducen una emisión H.264 continua mediante MPEG-TS, el protocolo v3 y FFplay; la prueba actual está configurada a 1280 × 800, 60 FPS y 12 Mbps. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo, conserva [mediciones reales](docs/testing.md) y genera un Flatpak provisional para Steam Deck. Los 60 FPS mejoran la fluidez, pero aún falta reducir la latencia visual y sustituir el encoder software por aceleración hardware.
 
 Tareas:
 
