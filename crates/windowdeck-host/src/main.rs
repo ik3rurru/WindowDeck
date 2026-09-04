@@ -6,9 +6,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 
-const WIDTH: u16 = 32;
-const HEIGHT: u16 = 20;
+const WIDTH: u16 = 128;
+const HEIGHT: u16 = 80;
 const FPS: u16 = 10;
+const DIGITS: [u64; 10] = [
+    0b11111_10001_10001_10001_10001_10001_11111,
+    0b00100_01100_00100_00100_00100_00100_01110,
+    0b11111_00001_00001_11111_10000_10000_11111,
+    0b11111_00001_00001_11111_00001_00001_11111,
+    0b10001_10001_10001_11111_00001_00001_00001,
+    0b11111_10000_10000_11111_00001_00001_11111,
+    0b11111_10000_10000_11111_10001_10001_11111,
+    0b11111_00001_00010_00100_01000_01000_01000,
+    0b11111_10001_10001_11111_10001_10001_11111,
+    0b11111_10001_10001_11111_00001_00001_11111,
+];
 
 fn main() {
     if let Err(error) = run() {
@@ -92,7 +104,7 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
                 captured_micros,
                 width: WIDTH,
                 height: HEIGHT,
-                pixels: pattern(number),
+                pixels: pattern(number, captured_micros),
             },
         )?;
         number += 1;
@@ -115,10 +127,34 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn pattern(frame: u64) -> Vec<u8> {
-    (0..usize::from(WIDTH) * usize::from(HEIGHT))
-        .map(|index| (((index % usize::from(WIDTH)) as u64 + frame) % 10) as u8)
-        .collect()
+fn pattern(frame: u64, captured_micros: u64) -> Vec<u8> {
+    let mut pixels = (0..usize::from(WIDTH) * usize::from(HEIGHT))
+        .map(|index| (((index % usize::from(WIDTH)) as u64 + frame) % 9) as u8)
+        .collect::<Vec<_>>();
+    draw_number(&mut pixels, 4, 8, frame);
+    draw_number(&mut pixels, 4, 40, captured_micros / 1_000);
+    pixels
+}
+
+fn draw_number(pixels: &mut [u8], x: usize, y: usize, number: u64) {
+    let text = number.to_string();
+    for (position, digit) in text.bytes().skip(text.len().saturating_sub(10)).enumerate() {
+        let glyph = DIGITS[usize::from(digit - b'0')];
+        for bit in 0..35 {
+            if glyph & (1 << (34 - bit)) == 0 {
+                continue;
+            }
+            for offset_y in 0..2 {
+                for offset_x in 0..2 {
+                    let pixel_x = x + position * 12 + (bit % 5) * 2 + offset_x;
+                    let pixel_y = y + (bit / 5) * 2 + offset_y;
+                    if pixel_x < usize::from(WIDTH) && pixel_y < usize::from(HEIGHT) {
+                        pixels[pixel_y * usize::from(WIDTH) + pixel_x] = 9;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -126,8 +162,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pattern_has_expected_size_and_moves() {
-        assert_eq!(pattern(0).len(), usize::from(WIDTH) * usize::from(HEIGHT));
-        assert_ne!(pattern(0), pattern(1));
+    fn pattern_has_expected_size_moves_and_contains_counters() {
+        let first = pattern(0, 0);
+        assert_eq!(first.len(), usize::from(WIDTH) * usize::from(HEIGHT));
+        assert!(first.contains(&9));
+        assert_ne!(first, pattern(1, 1_000));
     }
 }
