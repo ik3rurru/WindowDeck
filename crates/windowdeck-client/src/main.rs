@@ -3,16 +3,28 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
+use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
+    if let Err(error) = run() {
+        emit(
+            Level::Error,
+            "client_failed",
+            &[("error", &error.to_string())],
+        );
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
     let address = env::args()
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:48150".into());
     let mut stream = TcpStream::connect(&address)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    println!("Conectado a {address}");
+    emit(Level::Info, "host_connected", &[("address", &address)]);
 
     write_message(
         &mut stream,
@@ -23,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut state = ConnectionState::AwaitingHello;
     match read_message(&mut stream)? {
         Message::Hello { app_version } => {
-            println!("Host WindowDeck {app_version}");
+            emit(Level::Info, "host_hello", &[("version", &app_version)]);
             state = state.apply(ConnectionEvent::HelloReceived)?;
         }
         _ => return Err("se esperaba Hello".into()),
@@ -41,7 +53,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         Message::SessionConfig {
             width, height, fps, ..
         } => {
-            println!("Sesión: {width}x{height} a {fps} FPS");
+            emit(
+                Level::Info,
+                "session_configured",
+                &[
+                    ("width", &width.to_string()),
+                    ("height", &height.to_string()),
+                    ("fps", &fps.to_string()),
+                ],
+            );
             state = state.apply(ConnectionEvent::Negotiated)?;
             (width, height)
         }
@@ -60,9 +80,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 received += 1;
                 render(width, height, number, &pixels)?;
                 if received.is_multiple_of(10) {
-                    eprintln!(
-                        "frames recibidos: {received}, {:.1} FPS",
-                        received as f64 / started.elapsed().as_secs_f64()
+                    emit(
+                        Level::Info,
+                        "video_metrics",
+                        &[
+                            ("frames_received", &received.to_string()),
+                            (
+                                "fps",
+                                &format!(
+                                    "{:.1}",
+                                    received as f64 / started.elapsed().as_secs_f64()
+                                ),
+                            ),
+                        ],
                     );
                 }
             }

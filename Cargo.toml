@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/windowdeck-protocol",
+    "crates/windowdeck-diagnostics",
     "crates/windowdeck-host",
     "crates/windowdeck-client",
 ]

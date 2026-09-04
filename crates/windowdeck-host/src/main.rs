@@ -3,22 +3,42 @@ use std::error::Error;
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 
 const WIDTH: u16 = 32;
 const HEIGHT: u16 = 12;
 const FPS: u16 = 10;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
+    if let Err(error) = run() {
+        emit(
+            Level::Error,
+            "host_failed",
+            &[("error", &error.to_string())],
+        );
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
     let address = env::args().nth(1).unwrap_or_else(|| "0.0.0.0:48150".into());
     let listener = TcpListener::bind(&address)?;
-    println!("WindowDeck Host escuchando en {address}");
+    emit(Level::Info, "host_listening", &[("address", &address)]);
 
     loop {
         let (stream, peer) = listener.accept()?;
-        println!("Cliente conectado: {peer}");
+        emit(
+            Level::Info,
+            "client_connected",
+            &[("peer", &peer.to_string())],
+        );
         if let Err(error) = serve(stream) {
-            eprintln!("Sesión cerrada: {error}");
+            emit(
+                Level::Warn,
+                "session_closed",
+                &[("error", &error.to_string())],
+            );
         }
     }
 }
@@ -30,7 +50,7 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
 
     match read_message(&mut stream)? {
         Message::Hello { app_version } => {
-            println!("Cliente WindowDeck {app_version}");
+            emit(Level::Info, "client_hello", &[("version", &app_version)]);
             state = state.apply(ConnectionEvent::HelloReceived)?;
         }
         _ => return Err("se esperaba Hello".into()),
@@ -77,9 +97,16 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
         )?;
         number += 1;
         if number.is_multiple_of(u64::from(FPS)) {
-            println!(
-                "frames enviados: {number}, {:.1} FPS",
-                number as f64 / started.elapsed().as_secs_f64()
+            emit(
+                Level::Info,
+                "video_metrics",
+                &[
+                    ("frames_sent", &number.to_string()),
+                    (
+                        "fps",
+                        &format!("{:.1}", number as f64 / started.elapsed().as_secs_f64()),
+                    ),
+                ],
             );
         }
         thread::sleep(

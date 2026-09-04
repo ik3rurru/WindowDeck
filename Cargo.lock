@@ -6,13 +6,19 @@ version = 4
 name = "windowdeck-client"
 version = "0.1.0"
 dependencies = [
+ "windowdeck-diagnostics",
  "windowdeck-protocol",
 ]
+
+[[package]]
+name = "windowdeck-diagnostics"
+version = "0.1.0"
 
 [[package]]
 name = "windowdeck-host"
 version = "0.1.0"
 dependencies = [
+ "windowdeck-diagnostics",
  "windowdeck-protocol",
 ]
 
