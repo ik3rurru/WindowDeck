@@ -73,6 +73,21 @@ FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por 
 
 Durante la sesión, `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics` muestran FPS, velocidad del encoder, bitrate, bytes y paquetes. `h264_first_packet_*` mide el arranque local de la tubería, no la latencia visual entre dos equipos. La línea base y el procedimiento reproducible están en [docs/testing.md](docs/testing.md).
 
+## Probar el Flatpak en Steam Deck
+
+La acción `Flatpak` de GitHub genera un artefacto `WindowDeck-flatpak` para Steam Deck. Descarga y descomprime el artefacto, copia `WindowDeck.flatpak` a la Deck y, en modo escritorio, ejecuta:
+
+```bash
+flatpak install --user ./WindowDeck.flatpak
+flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --h264-test --fullscreen
+```
+
+El Flatpak incluye el cliente y usa FFplay y los códecs del runtime Freedesktop 25.08. En el PC debe seguir ejecutándose el host H.264 mostrado arriba. Para desinstalar la prueba:
+
+```bash
+flatpak uninstall --user io.github.ik3rurru.WindowDeck
+```
+
 ## Comprobar
 
 ```bash

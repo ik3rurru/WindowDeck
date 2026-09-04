@@ -1,4 +1,7 @@
 /target/
+/.flatpak-builder/
+/build-flatpak/
+/repo-flatpak/
 *.pdb
 *.log
 .idea/

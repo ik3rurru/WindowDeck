@@ -21,4 +21,18 @@ La tasa efectiva varía con el contenido de pantalla aunque el límite sea 4 Mbp
 2. Ejecutar el cliente con `cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test --fullscreen`.
 3. Mantener la sesión al menos 30 segundos y conservar los eventos `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics`.
 4. Repetir por Ethernet y Wi-Fi sin cambiar resolución, FPS ni contenido.
-5. Para latencia visual, grabar simultáneamente ambas pantallas con un contador visible; no restar timestamps de relojes no sincronizados.
+5. Confirmar que el encoder se mantiene cerca de 30 FPS, que su velocidad no baja de `1.0x` de forma sostenida y que los bytes recibidos siguen creciendo sin pausas.
+
+## Medir latencia visual
+
+1. Mostrar en Windows un cronómetro con milisegundos o alternar repetidamente una ventana entre blanco y negro.
+2. Grabar a la vez el monitor del PC y la Steam Deck con una cámara a 120 o 240 FPS.
+3. Contar los fotogramas entre el cambio visible en el PC y el mismo cambio en la Deck. La latencia es `fotogramas × 1000 / FPS de la cámara`; a 240 FPS cada fotograma equivale a 4,17 ms.
+4. Medir al menos 20 cambios y anotar la mediana y el percentil 95, primero por Ethernet y después por Wi-Fi.
+
+Este método incluye captura, codificación, red, decodificación y ambas pantallas. No se deben restar timestamps de equipos cuyos relojes no estén sincronizados.
+
+| Conexión | Muestras | Latencia mediana | P95 | FPS encoder | Incidencias |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Ethernet | 20 | pendiente | pendiente | pendiente | pendiente |
+| Wi-Fi | 20 | pendiente | pendiente | pendiente | pendiente |

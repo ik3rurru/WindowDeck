@@ -1,0 +1,33 @@
+app-id: io.github.ik3rurru.WindowDeck
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: windowdeck-client
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+modules:
+  - name: windowdeck
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      # ponytail: prototype build uses Cargo's network; vendor sources before Flathub submission.
+      build-args:
+        - --share=network
+    build-commands:
+      - command -v ffplay
+      - cargo build --locked --release -p windowdeck-client
+      - install -Dm0755 target/release/windowdeck-client /app/bin/windowdeck-client
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - target
