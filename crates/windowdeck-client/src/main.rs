@@ -1,9 +1,10 @@
 use softbuffer::{Context, Surface};
 use std::env;
 use std::error::Error;
-use std::net::{Shutdown, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -17,6 +18,8 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:48150";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 fn main() {
     if let Err(error) = run() {
@@ -34,18 +37,27 @@ fn run() -> Result<(), Box<dyn Error>> {
     let (stream, width, height) = connect(&options.address)?;
     let shutdown = stream.try_clone()?;
     let latest = Arc::new(Mutex::new(None));
+    let stopping = Arc::new(AtomicBool::new(false));
     let event_loop = EventLoop::<ClientEvent>::with_user_event().build()?;
-    let worker = receive_frames(stream, Arc::clone(&latest), event_loop.create_proxy());
-    let context = Context::new(event_loop.owned_display_handle())?;
-    let mut app = App::new(
-        context,
-        latest,
-        shutdown,
-        worker,
-        width,
-        height,
-        options.fullscreen,
+    let worker = receive_frames(
+        stream,
+        options.address,
+        Arc::clone(&latest),
+        Arc::clone(&stopping),
+        event_loop.create_proxy(),
     );
+    let context = Context::new(event_loop.owned_display_handle())?;
+    let mut app = App {
+        context,
+        surface: None,
+        latest,
+        frame: None,
+        stopping,
+        shutdown,
+        worker: Some(worker),
+        initial_size: (width, height),
+        start_fullscreen: options.fullscreen,
+    };
 
     event_loop.run_app(&mut app)?;
     app.stop()?;
@@ -76,7 +88,10 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
 }
 
 fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
-    let mut stream = TcpStream::connect(address)?;
+    let socket: SocketAddr = address
+        .parse()
+        .map_err(|_| "dirección inválida; usa IP:puerto")?;
+    let mut stream = TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     emit(Level::Info, "host_connected", &[("address", address)]);
@@ -143,105 +158,143 @@ struct Frame {
 enum ClientEvent {
     FrameReady,
     Disconnected(String),
+    Failed(String),
+    Reconnected(TcpStream),
     Stopped,
 }
 
 fn receive_frames(
     mut stream: TcpStream,
+    address: String,
     latest: Arc<Mutex<Option<Frame>>>,
+    stopping: Arc<AtomicBool>,
     proxy: EventLoopProxy<ClientEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let started = Instant::now();
-        let mut received = 0_u64;
-        let mut dropped = 0_u64;
-        let mut lost = 0_u64;
-        let mut previous = None;
+        'sessions: loop {
+            let started = Instant::now();
+            let mut received = 0_u64;
+            let mut dropped = 0_u64;
+            let mut lost = 0_u64;
+            let mut previous = None;
 
-        loop {
-            match read_message(&mut stream) {
-                Ok(Message::Frame {
-                    number,
-                    width,
-                    height,
-                    pixels,
-                    ..
-                }) => {
-                    received += 1;
-                    if let Some(previous) = previous {
-                        lost += number.saturating_sub(previous + 1);
-                    }
-                    previous = Some(number);
-
-                    let notify = match latest.lock() {
-                        Ok(mut latest) => {
-                            if latest
-                                .replace(Frame {
-                                    number,
-                                    width,
-                                    height,
-                                    pixels,
-                                })
-                                .is_some()
-                            {
-                                dropped += 1;
-                                false
-                            } else {
-                                true
-                            }
+            loop {
+                match read_message(&mut stream) {
+                    Ok(Message::Frame {
+                        number,
+                        width,
+                        height,
+                        pixels,
+                        ..
+                    }) => {
+                        received += 1;
+                        if let Some(previous) = previous {
+                            lost += number.saturating_sub(previous + 1);
                         }
-                        Err(error) => {
+                        previous = Some(number);
+
+                        let notify = match latest.lock() {
+                            Ok(mut latest) => {
+                                if latest
+                                    .replace(Frame {
+                                        number,
+                                        width,
+                                        height,
+                                        pixels,
+                                    })
+                                    .is_some()
+                                {
+                                    dropped += 1;
+                                    false
+                                } else {
+                                    true
+                                }
+                            }
+                            Err(error) => {
+                                let _ = proxy.send_event(ClientEvent::Failed(error.to_string()));
+                                return;
+                            }
+                        };
+                        if notify && proxy.send_event(ClientEvent::FrameReady).is_err() {
+                            return;
+                        }
+                        if received.is_multiple_of(60) {
+                            emit(
+                                Level::Info,
+                                "video_metrics",
+                                &[
+                                    ("frames_received", &received.to_string()),
+                                    ("frames_lost", &lost.to_string()),
+                                    ("frames_dropped", &dropped.to_string()),
+                                    (
+                                        "fps",
+                                        &format!(
+                                            "{:.1}",
+                                            received as f64 / started.elapsed().as_secs_f64()
+                                        ),
+                                    ),
+                                ],
+                            );
+                        }
+                    }
+                    Ok(Message::Ping { nonce }) => {
+                        if let Err(error) = write_message(&mut stream, &Message::Pong { nonce }) {
                             let _ = proxy.send_event(ClientEvent::Disconnected(error.to_string()));
                             break;
                         }
-                    };
-                    if notify && proxy.send_event(ClientEvent::FrameReady).is_err() {
+                    }
+                    Ok(Message::Stop) => {
+                        let _ = proxy.send_event(ClientEvent::Stopped);
+                        return;
+                    }
+                    Ok(Message::Error { code, message }) => {
+                        let _ = proxy.send_event(ClientEvent::Failed(format!(
+                            "host error {code}: {message}"
+                        )));
+                        return;
+                    }
+                    Ok(_) => {
+                        let _ = proxy.send_event(ClientEvent::Failed(
+                            "mensaje inesperado durante streaming".into(),
+                        ));
+                        return;
+                    }
+                    Err(error) => {
+                        if proxy
+                            .send_event(ClientEvent::Disconnected(error.to_string()))
+                            .is_err()
+                        {
+                            return;
+                        }
                         break;
                     }
-                    if received.is_multiple_of(60) {
-                        emit(
-                            Level::Info,
-                            "video_metrics",
-                            &[
-                                ("frames_received", &received.to_string()),
-                                ("frames_lost", &lost.to_string()),
-                                ("frames_dropped", &dropped.to_string()),
-                                (
-                                    "fps",
-                                    &format!(
-                                        "{:.1}",
-                                        received as f64 / started.elapsed().as_secs_f64()
-                                    ),
-                                ),
-                            ],
-                        );
+                }
+            }
+
+            loop {
+                thread::sleep(RECONNECT_DELAY);
+                if stopping.load(Ordering::Relaxed) {
+                    return;
+                }
+                match connect(&address) {
+                    Ok((new_stream, ..)) => {
+                        let Ok(shutdown) = new_stream.try_clone() else {
+                            continue;
+                        };
+                        if proxy
+                            .send_event(ClientEvent::Reconnected(shutdown))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        stream = new_stream;
+                        continue 'sessions;
                     }
-                }
-                Ok(Message::Ping { nonce }) => {
-                    if let Err(error) = write_message(&mut stream, &Message::Pong { nonce }) {
-                        let _ = proxy.send_event(ClientEvent::Disconnected(error.to_string()));
-                        break;
-                    }
-                }
-                Ok(Message::Stop) => {
-                    let _ = proxy.send_event(ClientEvent::Stopped);
-                    break;
-                }
-                Ok(Message::Error { code, message }) => {
-                    let _ = proxy.send_event(ClientEvent::Disconnected(format!(
-                        "host error {code}: {message}"
-                    )));
-                    break;
-                }
-                Ok(_) => {
-                    let _ = proxy.send_event(ClientEvent::Disconnected(
-                        "mensaje inesperado durante streaming".into(),
-                    ));
-                    break;
-                }
-                Err(error) => {
-                    let _ = proxy.send_event(ClientEvent::Disconnected(error.to_string()));
-                    break;
+                    Err(error) => emit(
+                        Level::Warn,
+                        "reconnect_failed",
+                        &[("error", &error.to_string())],
+                    ),
                 }
             }
         }
@@ -253,6 +306,7 @@ struct App {
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     latest: Arc<Mutex<Option<Frame>>>,
     frame: Option<Frame>,
+    stopping: Arc<AtomicBool>,
     shutdown: TcpStream,
     worker: Option<JoinHandle<()>>,
     initial_size: (u16, u16),
@@ -260,28 +314,8 @@ struct App {
 }
 
 impl App {
-    fn new(
-        context: Context<OwnedDisplayHandle>,
-        latest: Arc<Mutex<Option<Frame>>>,
-        shutdown: TcpStream,
-        worker: JoinHandle<()>,
-        width: u16,
-        height: u16,
-        start_fullscreen: bool,
-    ) -> Self {
-        Self {
-            context,
-            surface: None,
-            latest,
-            frame: None,
-            shutdown,
-            worker: Some(worker),
-            initial_size: (width, height),
-            start_fullscreen,
-        }
-    }
-
     fn stop(&mut self) -> Result<(), Box<dyn Error>> {
+        self.stopping.store(true, Ordering::Relaxed);
         let _ = self.shutdown.shutdown(Shutdown::Both);
         if self
             .worker
@@ -405,7 +439,17 @@ impl ApplicationHandler<ClientEvent> for App {
             },
             ClientEvent::Disconnected(error) => {
                 emit(Level::Warn, "host_disconnected", &[("error", &error)]);
+                if let Some(surface) = &self.surface {
+                    surface.window().set_title("WindowDeck — reconectando…");
+                }
+            }
+            ClientEvent::Failed(error) => {
+                emit(Level::Error, "session_failed", &[("error", &error)]);
                 event_loop.exit();
+            }
+            ClientEvent::Reconnected(shutdown) => {
+                self.shutdown = shutdown;
+                emit(Level::Info, "host_reconnected", &[]);
             }
             ClientEvent::Stopped => {
                 emit(Level::Info, "session_stopped", &[]);
