@@ -258,7 +258,7 @@ impl App {
         Ok(())
     }
 
-    fn fail(&self, event_loop: &ActiveEventLoop, error: &dyn std::fmt::Display) {
+    fn fail(event_loop: &ActiveEventLoop, error: &dyn std::fmt::Display) {
         emit(
             Level::Error,
             "render_failed",
@@ -281,22 +281,22 @@ impl App {
             return;
         };
         if let Err(error) = surface.resize(width, height) {
-            self.fail(event_loop, &error);
+            Self::fail(event_loop, &error);
             return;
         }
         let mut buffer = match surface.buffer_mut() {
             Ok(buffer) => buffer,
             Err(error) => {
-                self.fail(event_loop, &error);
+                Self::fail(event_loop, &error);
                 return;
             }
         };
         if let Err(error) = draw_frame(frame, size.width, size.height, &mut buffer) {
-            self.fail(event_loop, &error);
+            Self::fail(event_loop, &error);
             return;
         }
         if let Err(error) = buffer.present() {
-            self.fail(event_loop, &error);
+            Self::fail(event_loop, &error);
         }
     }
 }
@@ -317,13 +317,13 @@ impl ApplicationHandler<ClientEvent> for App {
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Rc::new(window),
             Err(error) => {
-                self.fail(event_loop, &error);
+                Self::fail(event_loop, &error);
                 return;
             }
         };
         match Surface::new(&self.context, window) {
             Ok(surface) => self.surface = Some(surface),
-            Err(error) => self.fail(event_loop, &error),
+            Err(error) => Self::fail(event_loop, &error),
         }
     }
 
@@ -341,7 +341,7 @@ impl ApplicationHandler<ClientEvent> for App {
                         self.frame = Some(frame);
                     }
                 }
-                Err(error) => self.fail(event_loop, &error),
+                Err(error) => Self::fail(event_loop, &error),
             },
             ClientEvent::Disconnected(error) => {
                 emit(Level::Warn, "host_disconnected", &[("error", &error)]);
