@@ -41,6 +41,8 @@ La prueba posterior del commit `99c8bbc`, con un objetivo de 8 Mbps, mostró una
 
 La prueba del commit `84e70f3`, con un objetivo de 12 Mbps, mejoró claramente la calidad percibida. Se continúa con 16 Mbps para localizar el punto a partir del cual aumentar el bitrate deja de aportar una mejora visible.
 
+La prueba del commit `7749edf`, con un objetivo de 16 Mbps, mantuvo 59,25 FPS durante 122 segundos y entregó unos 14,5 Mbps tanto en el host como en el cliente. La imagen se percibió muy buena y no aparecieron indicios de saturación de red; se conserva este bitrate mientras se prueba reducir el buffering del reproductor.
+
 ## Repetir en dos equipos
 
 1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.
