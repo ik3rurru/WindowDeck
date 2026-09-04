@@ -15,6 +15,18 @@ Medición del 4 de septiembre de 2026 con host y cliente en el mismo PC Windows,
 
 La tasa efectiva varía con el contenido de pantalla aunque el límite sea 4 Mbps. Esta prueba de loopback confirma que el encoder mantiene tiempo real, pero no mide red, Steam Deck ni latencia visual de extremo a extremo.
 
+## Línea base en Steam Deck por Wi-Fi
+
+Prueba visual del 4 de septiembre de 2026 con el Flatpak del commit `cc113ec`, durante 179 segundos:
+
+| Medida | Resultado |
+| --- | ---: |
+| Encoder | 29,99 FPS, velocidad 1,0× |
+| Envío y recepción | 4,20 Mbps estables |
+| Fluidez | Estable, con tirones en movimientos muy rápidos |
+| Imagen en movimiento | Limpia; recuperación inmediata al detenerse |
+| Latencia visual percibida | Molesta |
+
 ## Repetir en dos equipos
 
 1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.

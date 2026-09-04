@@ -104,6 +104,7 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
         .parse()
         .map_err(|_| "dirección inválida; usa IP:puerto")?;
     let mut stream = TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT)?;
+    stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     emit(Level::Info, "host_connected", &[("address", address)]);
@@ -196,7 +197,7 @@ fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Erro
         "low_delay",
         "-framedrop",
         "-probesize",
-        "32k",
+        "32",
         "-analyzeduration",
         "0",
         "-f",

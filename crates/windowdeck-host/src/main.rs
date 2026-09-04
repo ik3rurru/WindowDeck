@@ -165,6 +165,7 @@ fn run_server(address: String, monitor: Option<usize>, codec: VideoCodec) -> Res
 }
 
 fn serve(mut stream: TcpStream, monitor: Option<usize>, codec: VideoCodec) -> Result<(), AnyError> {
+    stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut state = ConnectionState::AwaitingHello;
