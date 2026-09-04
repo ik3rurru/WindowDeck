@@ -2,12 +2,12 @@
 
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede codificar, enviar y reproducir una prueba H.264, pero todavía no ofrece vídeo comprimido continuo ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 30 FPS, pero todavía no usa aceleración hardware ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
 
 ## Requisitos
 
 - Rust estable con Cargo.
-- FFplay disponible en `PATH` para la prueba H.264 visible.
+- FFmpeg disponible en `PATH` en el host y FFplay en el cliente para la prueba H.264 visible.
 - Dos equipos en la misma red local o dos terminales en el mismo equipo.
 - El puerto TCP elegido permitido por el firewall de Windows; el predeterminado es `48150`.
 
@@ -57,7 +57,7 @@ cargo run -p windowdeck-host -- --encode-test
 
 Puedes indicar otro monitor, por ejemplo `--encode-test 2`. La prueba codifica 60 frames a 30 FPS y 4 Mbps en memoria, muestra el tamaño resultante y termina. Usa la resolución actual de la pantalla.
 
-Para probar el mismo segmento H.264 a través de la red, inicia el host:
+Para probar H.264 continuo a través de la red, inicia el host:
 
 ```powershell
 cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150
@@ -69,7 +69,7 @@ Y ejecuta el receptor desde el otro equipo o una segunda terminal:
 cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test
 ```
 
-El cliente reensambla los fragmentos, comprueba el MP4 con H.264, lo ofrece a FFplay desde memoria mediante un servidor local y termina al cerrar el vídeo. Añade `--fullscreen` si quieres verlo a pantalla completa. No se guarda la pantalla en disco. Es una prueba por lotes; la emisión continua de baja latencia es el siguiente paso.
+FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por software a 30 FPS y 4 Mbps y envía MPEG-TS mientras la captura sigue activa. El cliente valida el orden de los paquetes y alimenta FFplay directamente, sin guardar la pantalla en disco ni crear una cola en la aplicación. Cierra la ventana para terminar y añade `--fullscreen` si quieres verla a pantalla completa.
 
 ## Comprobar
 

@@ -1,6 +1,6 @@
 # ADR 0006: reproducción inicial con FFplay
 
-- Estado: aceptado
+- Estado: sustituido por ADR 0007
 - Fecha: 2026-09-04
 
 ## Decisión

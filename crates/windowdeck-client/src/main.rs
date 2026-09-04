@@ -2,9 +2,9 @@ use softbuffer::{Context, Surface};
 use std::env;
 use std::error::Error;
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::num::NonZeroU32;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,6 @@ use winit::window::{Fullscreen, Window, WindowId};
 const DEFAULT_ADDRESS: &str = "127.0.0.1:48150";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
-const MAX_H264_TEST_SIZE: usize = 4 * 1024 * 1024;
 
 fn main() {
     if let Err(error) = run() {
@@ -184,227 +183,139 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
 }
 
 fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Error>> {
-    let (mut stream, session_id, ..) = connect(address, VideoCodec::H264)?;
-    let (bytes, fragments) = receive_h264_segment(&mut stream, session_id)?;
-    emit(
-        Level::Info,
-        "h264_received",
-        &[
-            ("bytes", &bytes.len().to_string()),
-            ("fragments", &fragments.to_string()),
-        ],
-    );
-    play_h264(&bytes, fullscreen)?;
-    emit(Level::Info, "h264_displayed", &[]);
-    Ok(())
-}
-
-fn receive_h264_segment(
-    mut reader: impl Read,
-    session_id: u64,
-) -> Result<(Vec<u8>, u16), Box<dyn Error>> {
-    let mut bytes = Vec::new();
-    let mut fragment_count = None;
-    let mut next_fragment = 0_u16;
-
-    loop {
-        match read_message(&mut reader)? {
-            Message::VideoChunk {
-                session_id: chunk_session_id,
-                frame_number,
-                fragment_index,
-                fragment_count: chunk_count,
-                keyframe,
-                payload,
-                ..
-            } => {
-                if chunk_session_id != session_id || frame_number != 0 {
-                    return Err("fragmento H.264 de otra sesión o segmento".into());
-                }
-                if fragment_index != next_fragment
-                    || fragment_count.is_some_and(|count| count != chunk_count)
-                {
-                    return Err("fragmentos H.264 desordenados".into());
-                }
-                if next_fragment == 0 {
-                    if !keyframe {
-                        return Err("el segmento H.264 no comienza en un keyframe".into());
-                    }
-                    fragment_count = Some(chunk_count);
-                }
-                let new_len = bytes
-                    .len()
-                    .checked_add(payload.len())
-                    .ok_or("tamaño H.264 desbordado")?;
-                if new_len > MAX_H264_TEST_SIZE {
-                    return Err("segmento H.264 mayor de 4 MiB".into());
-                }
-                bytes.extend_from_slice(&payload);
-                next_fragment += 1;
-            }
-            Message::Stop if fragment_count == Some(next_fragment) => break,
-            Message::Stop => return Err("segmento H.264 incompleto".into()),
-            Message::Error { code, message } => {
-                return Err(format!("host error {code}: {message}").into());
-            }
-            _ => return Err("mensaje inesperado durante la prueba H.264".into()),
-        }
-    }
-
-    if bytes.get(4..8) != Some(b"ftyp".as_slice()) {
-        return Err("la salida H.264 no contiene un contenedor MP4 válido".into());
-    }
-    Ok((bytes, next_fragment))
-}
-
-fn play_h264(bytes: &[u8], fullscreen: bool) -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    let stopping = Arc::new(AtomicBool::new(false));
-    let server_stopping = Arc::clone(&stopping);
-    let video = Arc::new(bytes.to_vec());
-    let server = thread::spawn(move || serve_video(listener, video, server_stopping));
-
+    let (stream, session_id, ..) = connect(address, VideoCodec::H264)?;
     let mut command = Command::new("ffplay");
     command.args([
         "-loglevel",
         "error",
         "-autoexit",
         "-an",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-framedrop",
+        "-probesize",
+        "32k",
+        "-analyzeduration",
+        "0",
+        "-f",
+        "mpegts",
         "-window_title",
         "WindowDeck H.264",
     ]);
     if fullscreen {
         command.arg("-fs");
     }
-    let player = command
-        .arg(format!("http://{address}/video.mp4"))
-        .status()
+    let mut player = command
+        .args(["-i", "pipe:0"])
+        .stdin(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!("no se pudo iniciar ffplay; instala FFmpeg: {error}"),
             )
-        });
-    stopping.store(true, Ordering::Relaxed);
-    let _ = TcpStream::connect(address);
-    server
+        })?;
+    let input = player.stdin.take().ok_or("ffplay no abrió su entrada")?;
+    let shutdown = stream.try_clone()?;
+    let stopping = Arc::new(AtomicBool::new(false));
+    let worker_stopping = Arc::clone(&stopping);
+    let worker = thread::spawn(move || forward_h264(stream, input, session_id, &worker_stopping));
+    let player_closed = loop {
+        if worker.is_finished() {
+            break false;
+        }
+        if player.try_wait()?.is_some() {
+            break true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    if player_closed {
+        stopping.store(true, Ordering::Relaxed);
+        let _ = shutdown.shutdown(Shutdown::Both);
+    }
+    let forwarded = worker
         .join()
-        .map_err(|_| "el servidor local de vídeo terminó inesperadamente")??;
-    let player = player?;
-    if !player.success() {
-        return Err(format!("ffplay terminó con {player}").into());
-    }
-    Ok(())
-}
-
-fn serve_video(
-    listener: TcpListener,
-    video: Arc<Vec<u8>>,
-    stopping: Arc<AtomicBool>,
-) -> io::Result<()> {
-    while !stopping.load(Ordering::Relaxed) {
-        let (mut stream, _) = listener.accept()?;
-        if stopping.load(Ordering::Relaxed) {
-            break;
-        }
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        serve_video_request(&mut stream, &video)?;
-    }
-    Ok(())
-}
-
-fn serve_video_request(stream: &mut TcpStream, video: &[u8]) -> io::Result<()> {
-    if video.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "vídeo vacío"));
-    }
-    let mut request = Vec::new();
-    let mut buffer = [0; 1024];
-    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-        let read = stream.read(&mut buffer)?;
-        if read == 0 || request.len() + read > 8 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "petición HTTP inválida",
-            ));
-        }
-        request.extend_from_slice(&buffer[..read]);
-    }
-    let request = std::str::from_utf8(&request)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "petición HTTP no UTF-8"))?;
-    let request_line = request
-        .lines()
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "petición HTTP vacía"))?;
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or_default();
-    let path = request_parts.next().unwrap_or_default();
-    if !matches!(method, "GET" | "HEAD") || path != "/video.mp4" {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "petición HTTP no admitida",
-        ));
-    }
-
-    let range = parse_range(request, video.len())?;
-    let (start, end) = range.unwrap_or((0, video.len() - 1));
-    let length = end - start + 1;
-    if range.is_some() {
-        write!(
-            stream,
-            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\n",
-            video.len()
-        )?;
-    } else {
-        write!(stream, "HTTP/1.1 200 OK\r\n")?;
-    }
-    write!(
-        stream,
-        "Content-Type: video/mp4\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
-    )?;
-    if method == "GET" {
-        stream.write_all(&video[start..=end])?;
-    }
-    Ok(())
-}
-
-fn parse_range(request: &str, length: usize) -> io::Result<Option<(usize, usize)>> {
-    let Some(value) = request.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("range").then_some(value.trim())
-    }) else {
-        return Ok(None);
+        .map_err(|_| "el receptor H.264 terminó inesperadamente")?;
+    let status = match player.try_wait()? {
+        Some(status) => status,
+        None => player.wait()?,
     };
-    let value = value
-        .strip_prefix("bytes=")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
-    let (start, end) = value
-        .split_once('-')
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
-    let (start, end) = if start.is_empty() {
-        let suffix = end
-            .parse::<usize>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
-        (length.saturating_sub(suffix), length - 1)
-    } else {
-        let start = start
-            .parse::<usize>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
-        let end = if end.is_empty() {
-            length - 1
-        } else {
-            end.parse::<usize>()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?
+    if !status.success() {
+        return Err(format!("ffplay terminó con {status}").into());
+    }
+    let (bytes, chunks) = forwarded?;
+    emit(
+        Level::Info,
+        "h264_stream_stopped",
+        &[
+            ("bytes", &bytes.to_string()),
+            ("chunks", &chunks.to_string()),
+        ],
+    );
+    Ok(())
+}
+
+fn forward_h264(
+    mut reader: impl Read,
+    mut output: impl Write,
+    session_id: u64,
+    stopping: &AtomicBool,
+) -> io::Result<(u64, u64)> {
+    let mut bytes = 0_u64;
+    let mut chunks = 0_u64;
+    loop {
+        let message = match read_message(&mut reader) {
+            Ok(message) => message,
+            Err(_) if stopping.load(Ordering::Relaxed) => break,
+            Err(error) => return Err(io::Error::other(error)),
         };
-        (start, end.min(length - 1))
-    };
-    if start > end || end >= length {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "rango HTTP fuera de límites",
-        ));
+        match message {
+            Message::VideoChunk {
+                session_id: chunk_session_id,
+                frame_number,
+                fragment_index,
+                fragment_count,
+                keyframe,
+                payload,
+                ..
+            } if chunk_session_id == session_id
+                && frame_number == chunks
+                && fragment_index == 0
+                && fragment_count == 1
+                && (chunks != 0 || keyframe) =>
+            {
+                if let Err(error) = output.write_all(&payload) {
+                    if error.kind() == io::ErrorKind::BrokenPipe {
+                        break;
+                    }
+                    return Err(error);
+                }
+                bytes = bytes
+                    .checked_add(payload.len() as u64)
+                    .ok_or_else(|| io::Error::other("contador H.264 desbordado"))?;
+                chunks += 1;
+            }
+            Message::VideoChunk { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "paquete H.264 desordenado o de otra sesión",
+                ));
+            }
+            Message::Stop => break,
+            Message::Error { code, message } => {
+                return Err(io::Error::other(format!("host error {code}: {message}")));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "mensaje inesperado durante streaming H.264",
+                ));
+            }
+        }
     }
-    Ok(Some((start, end)))
+    Ok((bytes, chunks))
 }
 
 #[derive(Debug)]
@@ -901,32 +812,31 @@ mod tests {
     }
 
     #[test]
-    fn h264_test_reassembles_ordered_fragments() {
+    fn h264_stream_forwards_ordered_chunks() {
         let mut stream = Vec::new();
-        for (fragment_index, payload) in [(0, b"\0\0\0\x18".as_slice()), (1, b"ftyp".as_slice())] {
+        for (frame_number, payload) in [(0, b"first".as_slice()), (1, b"second".as_slice())] {
             write_message(
                 &mut stream,
                 &Message::VideoChunk {
                     session_id: 42,
-                    frame_number: 0,
+                    frame_number,
                     captured_micros: 0,
-                    fragment_index,
-                    fragment_count: 2,
-                    keyframe: true,
+                    fragment_index: 0,
+                    fragment_count: 1,
+                    keyframe: frame_number == 0,
                     payload: payload.to_vec(),
                 },
             )
-            .expect("valid fragment");
+            .expect("valid chunk");
         }
         write_message(&mut stream, &Message::Stop).expect("valid stop");
 
-        let (bytes, fragments) =
-            receive_h264_segment(stream.as_slice(), 42).expect("valid segment");
-        assert_eq!(bytes, b"\0\0\0\x18ftyp");
-        assert_eq!(fragments, 2);
+        let mut output = Vec::new();
         assert_eq!(
-            parse_range("GET /video.mp4 HTTP/1.1\r\nRange: bytes=4-7\r\n", 8).expect("valid range"),
-            Some((4, 7))
+            forward_h264(stream.as_slice(), &mut output, 42, &AtomicBool::new(false))
+                .expect("valid stream"),
+            (11, 2)
         );
+        assert_eq!(output, b"firstsecond");
     }
 }

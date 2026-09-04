@@ -9,4 +9,4 @@ La versión 3 del protocolo negocia el códec por sesión y añade fragmentos de
 
 ## Consecuencias
 
-El transporte no depende de una implementación concreta del encoder y puede llevar H.264 sin relajar sus límites de memoria. El flujo visual continúa negociando RGB332; un modo separado negocia H.264 y reensambla un segmento MP4 con un límite de 4 MiB.
+El transporte no depende de una implementación concreta del encoder y puede llevar H.264 sin relajar sus límites por mensaje. El flujo visual continúa negociando RGB332; un modo separado negocia H.264 y envía paquetes MPEG-TS ordenados de forma continua.

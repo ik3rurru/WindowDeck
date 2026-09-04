@@ -1,9 +1,11 @@
 use super::AnyError;
+use std::io::{self, Read};
 use std::net::TcpStream;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{MAX_VIDEO_PAYLOAD, Message, write_message};
-use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
+use windows::Storage::Streams::InMemoryRandomAccessStream;
 use windows::core::Interface;
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
@@ -76,7 +78,6 @@ struct EncodeFlags {
     index: usize,
     width: u32,
     height: u32,
-    network: Option<(TcpStream, u64)>,
 }
 
 struct EncodeProbe {
@@ -86,7 +87,6 @@ struct EncodeProbe {
     frames: u64,
     width: u32,
     height: u32,
-    network: Option<(TcpStream, u64)>,
 }
 
 impl GraphicsCaptureApiHandler for EncodeProbe {
@@ -124,7 +124,6 @@ impl GraphicsCaptureApiHandler for EncodeProbe {
             frames: 0,
             width: flags.width,
             height: flags.height,
-            network: flags.network,
         })
     }
 
@@ -149,18 +148,6 @@ impl GraphicsCaptureApiHandler for EncodeProbe {
         let bytes = self.stream.Size()?;
         if bytes == 0 {
             return Err("el codificador H.264 no produjo datos".into());
-        }
-        if let Some((stream, session_id)) = &mut self.network {
-            let encoded = read_stream(&self.stream, bytes)?;
-            let fragments = send_h264(stream, *session_id, &encoded)?;
-            emit(
-                Level::Info,
-                "h264_sent",
-                &[
-                    ("bytes", &bytes.to_string()),
-                    ("fragments", &fragments.to_string()),
-                ],
-            );
         }
         emit(
             Level::Info,
@@ -188,7 +175,6 @@ pub fn encode(index: usize) -> Result<(), AnyError> {
         index,
         width: monitor.width()?,
         height: monitor.height()?,
-        network: None,
     };
     EncodeProbe::start(settings(
         monitor,
@@ -199,19 +185,94 @@ pub fn encode(index: usize) -> Result<(), AnyError> {
 }
 
 pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
-    let monitor = Monitor::from_index(index)?;
-    let flags = EncodeFlags {
-        name: monitor.name()?,
-        index,
-        width: monitor.width()?,
-        height: monitor.height()?,
-        network: Some((stream, session_id)),
-    };
-    EncodeProbe::start(settings(
-        monitor,
-        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(ENCODE_FPS))),
-        flags,
-    ))?;
+    let input = format!(
+        "ddagrab=output_idx={}:framerate={ENCODE_FPS}:draw_mouse=1",
+        index - 1
+    );
+    let filter = format!(
+        "hwdownload,format=bgra,scale={}:{}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
+        super::H264_WIDTH,
+        super::H264_HEIGHT,
+        super::H264_WIDTH,
+        super::H264_HEIGHT,
+    );
+    let mut ffmpeg = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
+        .arg(input)
+        .args([
+            "-vf",
+            &filter,
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-bf",
+            "0",
+            "-g",
+            &ENCODE_FPS.to_string(),
+            "-b:v",
+            "4M",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "mpegts",
+            "-mpegts_flags",
+            "+resend_headers",
+            "-muxdelay",
+            "0",
+            "-muxpreload",
+            "0",
+            "-flush_packets",
+            "1",
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("no se pudo iniciar ffmpeg; instala FFmpeg: {error}"),
+            )
+        })?;
+    let mut output = ffmpeg.stdout.take().ok_or("ffmpeg no abrió su salida")?;
+    emit(
+        Level::Info,
+        "h264_stream_started",
+        &[
+            ("monitor", &index.to_string()),
+            ("width", &super::H264_WIDTH.to_string()),
+            ("height", &super::H264_HEIGHT.to_string()),
+            ("fps", &ENCODE_FPS.to_string()),
+        ],
+    );
+
+    let result = send_h264_stream(&mut output, stream, session_id);
+    let _ = ffmpeg.kill();
+    let status = ffmpeg.wait()?;
+    let (bytes, chunks) = result?;
+    if !status.success() {
+        return Err(format!("ffmpeg terminó con {status}").into());
+    }
+    emit(
+        Level::Info,
+        "h264_stream_stopped",
+        &[
+            ("bytes", &bytes.to_string()),
+            ("chunks", &chunks.to_string()),
+        ],
+    );
     Ok(())
 }
 
@@ -220,35 +281,38 @@ pub fn size(index: usize) -> Result<(u16, u16), AnyError> {
     Ok((monitor.width()?.try_into()?, monitor.height()?.try_into()?))
 }
 
-fn read_stream(stream: &InMemoryRandomAccessStream, size: u64) -> Result<Vec<u8>, AnyError> {
-    let size = u32::try_from(size).map_err(|_| "salida H.264 demasiado grande")?;
-    let input = stream.GetInputStreamAt(0)?;
-    let reader = DataReader::CreateDataReader(&input)?;
-    reader.LoadAsync(size)?.join()?;
-    let mut bytes = vec![0; size as usize];
-    reader.ReadBytes(&mut bytes)?;
-    Ok(bytes)
-}
-
-fn send_h264(stream: &mut TcpStream, session_id: u64, bytes: &[u8]) -> Result<u16, AnyError> {
-    let fragment_count = u16::try_from(bytes.len().div_ceil(MAX_VIDEO_PAYLOAD))
-        .map_err(|_| "salida H.264 demasiado grande")?;
-    for (fragment_index, payload) in bytes.chunks(MAX_VIDEO_PAYLOAD).enumerate() {
+fn send_h264_stream(
+    mut input: impl Read,
+    mut stream: impl io::Write,
+    session_id: u64,
+) -> Result<(u64, u64), AnyError> {
+    let started = Instant::now();
+    let mut buffer = vec![0; MAX_VIDEO_PAYLOAD];
+    let mut bytes = 0_u64;
+    let mut chunk = 0_u64;
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        // ponytail: this probe sequences transport chunks; parse H.264 access units when recovery needs exact keyframes.
         write_message(
-            &mut *stream,
+            &mut stream,
             &Message::VideoChunk {
                 session_id,
-                frame_number: 0,
-                captured_micros: 0,
-                fragment_index: fragment_index.try_into()?,
-                fragment_count,
-                keyframe: true,
-                payload: payload.to_vec(),
+                frame_number: chunk,
+                captured_micros: started.elapsed().as_micros() as u64,
+                fragment_index: 0,
+                fragment_count: 1,
+                keyframe: chunk == 0,
+                payload: buffer[..read].to_vec(),
             },
         )?;
+        bytes += read as u64;
+        chunk += 1;
     }
-    write_message(stream, &Message::Stop)?;
-    Ok(fragment_count)
+    write_message(&mut stream, &Message::Stop)?;
+    Ok((bytes, chunk))
 }
 
 struct StreamFlags {
@@ -393,6 +457,7 @@ fn downscale_bgra(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windowdeck_protocol::read_message;
 
     #[test]
     fn bgra_is_downscaled_to_rgb332() {
@@ -404,5 +469,40 @@ mod tests {
         );
         assert!(output.iter().all(|pixel| *pixel == 0xe0));
         assert!(downscale_bgra(&[], 1, 1, &mut output).is_err());
+    }
+
+    #[test]
+    fn h264_stream_is_split_into_bounded_chunks() {
+        let input = vec![7; MAX_VIDEO_PAYLOAD + 1];
+        let mut output = Vec::new();
+        assert_eq!(
+            send_h264_stream(input.as_slice(), &mut output, 42).expect("valid stream"),
+            (input.len() as u64, 2)
+        );
+        let mut messages = output.as_slice();
+        for (number, size) in [(0, MAX_VIDEO_PAYLOAD), (1, 1)] {
+            match read_message(&mut messages).expect("valid chunk") {
+                Message::VideoChunk {
+                    session_id,
+                    frame_number,
+                    fragment_index,
+                    fragment_count,
+                    keyframe,
+                    payload,
+                    ..
+                } => {
+                    assert_eq!(session_id, 42);
+                    assert_eq!(frame_number, number);
+                    assert_eq!((fragment_index, fragment_count), (0, 1));
+                    assert_eq!(keyframe, number == 0);
+                    assert_eq!(payload.len(), size);
+                }
+                message => panic!("unexpected message: {message:?}"),
+            }
+        }
+        assert_eq!(
+            read_message(&mut messages).expect("valid stop"),
+            Message::Stop
+        );
     }
 }

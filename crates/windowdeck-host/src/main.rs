@@ -16,6 +16,10 @@ const DEFAULT_ADDRESS: &str = "0.0.0.0:48150";
 const WIDTH: u16 = 128;
 const HEIGHT: u16 = 80;
 const FPS: u16 = 10;
+#[cfg(windows)]
+const H264_WIDTH: u16 = 1280;
+#[cfg(windows)]
+const H264_HEIGHT: u16 = 800;
 const DIGITS: [u64; 10] = [
     0b11111_10001_10001_10001_10001_10001_11111,
     0b00100_01100_00100_00100_00100_00100_01110,
@@ -285,8 +289,8 @@ fn stream_format(codec: VideoCodec, monitor: Option<usize>) -> Result<(u16, u16,
 
 #[cfg(windows)]
 fn h264_format(index: usize) -> Result<(u16, u16, u16), AnyError> {
-    let (width, height) = capture::size(index)?;
-    Ok((width, height, capture::ENCODE_FPS as u16))
+    capture::size(index)?;
+    Ok((H264_WIDTH, H264_HEIGHT, capture::ENCODE_FPS as u16))
 }
 
 #[cfg(not(windows))]
