@@ -434,6 +434,8 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
+Estado actual: la captura ya alimenta el encoder H.264 de Windows directamente desde D3D11 y se ha validado su salida en memoria. Aún falta transportar y decodificar ese vídeo.
+
 Tareas:
 
 - Integrar H.264 de baja latencia.

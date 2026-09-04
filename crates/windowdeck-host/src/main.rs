@@ -42,6 +42,7 @@ fn run() -> Result<(), AnyError> {
     match parse_mode(env::args().skip(1))? {
         Mode::Serve { address, monitor } => run_server(address, monitor),
         Mode::CaptureTest(index) => capture_test(index),
+        Mode::EncodeTest(index) => encode_test(index),
     }
 }
 
@@ -52,21 +53,26 @@ enum Mode {
         monitor: Option<usize>,
     },
     CaptureTest(usize),
+    EncodeTest(usize),
 }
 
 fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
     let mut args = args.into_iter();
     match args.next().as_deref() {
-        Some("--capture-test") => {
+        Some(command @ ("--capture-test" | "--encode-test")) => {
             let index = args
                 .next()
                 .map(|value| value.parse().map_err(|_| "índice de monitor inválido"))
                 .transpose()?
                 .unwrap_or(1);
             if index == 0 || args.next().is_some() {
-                return Err("usa --capture-test [N], con N mayor que cero");
+                return Err("usa --capture-test [N] o --encode-test [N], con N mayor que cero");
             }
-            Ok(Mode::CaptureTest(index))
+            Ok(if command == "--capture-test" {
+                Mode::CaptureTest(index)
+            } else {
+                Mode::EncodeTest(index)
+            })
         }
         Some("--capture") => {
             let index = args
@@ -104,6 +110,16 @@ fn capture_test(index: usize) -> Result<(), AnyError> {
 #[cfg(not(windows))]
 fn capture_test(_index: usize) -> Result<(), AnyError> {
     Err("la captura de pantalla solo está disponible en Windows".into())
+}
+
+#[cfg(windows)]
+fn encode_test(index: usize) -> Result<(), AnyError> {
+    capture::encode(index)
+}
+
+#[cfg(not(windows))]
+fn encode_test(_index: usize) -> Result<(), AnyError> {
+    Err("la codificación de pantalla solo está disponible en Windows".into())
 }
 
 fn run_server(address: String, monitor: Option<usize>) -> Result<(), AnyError> {
@@ -278,6 +294,10 @@ mod tests {
         assert_eq!(
             parse_mode(["--capture-test".into(), "2".into()]),
             Ok(Mode::CaptureTest(2))
+        );
+        assert_eq!(
+            parse_mode(["--encode-test".into()]),
+            Ok(Mode::EncodeTest(1))
         );
         assert_eq!(
             parse_mode(["--capture".into(), "2".into(), "127.0.0.1:9".into()]),

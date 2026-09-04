@@ -1807,6 +1807,7 @@ version = "0.1.0"
 dependencies = [
  "windowdeck-diagnostics",
  "windowdeck-protocol",
+ "windows",
  "windows-capture",
 ]
 

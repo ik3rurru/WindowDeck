@@ -3,7 +3,13 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{Message, write_message};
+use windows::Storage::Streams::InMemoryRandomAccessStream;
+use windows::core::Interface;
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
+use windows_capture::encoder::{
+    AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
+    VideoSettingsSubType,
+};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
 use windows_capture::monitor::Monitor;
@@ -11,6 +17,10 @@ use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
+
+const ENCODE_FPS: u32 = 30;
+const ENCODE_BITRATE: u32 = 4_000_000;
+const ENCODE_FRAMES: u64 = 60;
 
 struct CaptureProbe;
 
@@ -57,6 +67,117 @@ pub fn run(index: usize) -> Result<(), AnyError> {
         monitor,
         MinimumUpdateIntervalSettings::Default,
         (name, index),
+    ))?;
+    Ok(())
+}
+
+struct EncodeFlags {
+    name: String,
+    index: usize,
+    width: u32,
+    height: u32,
+}
+
+struct EncodeProbe {
+    encoder: Option<VideoEncoder>,
+    stream: InMemoryRandomAccessStream,
+    started: Instant,
+    frames: u64,
+    width: u32,
+    height: u32,
+}
+
+impl GraphicsCaptureApiHandler for EncodeProbe {
+    type Flags = EncodeFlags;
+    type Error = AnyError;
+
+    fn new(context: Context<Self::Flags>) -> Result<Self, Self::Error> {
+        let flags = context.flags;
+        let stream = InMemoryRandomAccessStream::new()?;
+        let encoder = VideoEncoder::new_from_stream(
+            VideoSettingsBuilder::new(flags.width, flags.height)
+                .sub_type(VideoSettingsSubType::H264)
+                .bitrate(ENCODE_BITRATE)
+                .frame_rate(ENCODE_FPS),
+            AudioSettingsBuilder::new().disabled(true),
+            ContainerSettingsBuilder::new(),
+            stream.cast()?,
+        )?;
+        emit(
+            Level::Info,
+            "h264_encode_started",
+            &[
+                ("monitor", &flags.index.to_string()),
+                ("name", &flags.name),
+                ("width", &flags.width.to_string()),
+                ("height", &flags.height.to_string()),
+                ("fps", &ENCODE_FPS.to_string()),
+                ("bitrate", &ENCODE_BITRATE.to_string()),
+            ],
+        );
+        Ok(Self {
+            encoder: Some(encoder),
+            stream,
+            started: Instant::now(),
+            frames: 0,
+            width: flags.width,
+            height: flags.height,
+        })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut Frame<'_>,
+        capture_control: InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        self.encoder
+            .as_mut()
+            .ok_or("codificador H.264 no disponible")?
+            .send_frame(frame)?;
+        self.frames += 1;
+        if self.frames < ENCODE_FRAMES {
+            return Ok(());
+        }
+
+        self.encoder
+            .take()
+            .ok_or("codificador H.264 no disponible")?
+            .finish()?;
+        let bytes = self.stream.Size()?;
+        if bytes == 0 {
+            return Err("el codificador H.264 no produjo datos".into());
+        }
+        emit(
+            Level::Info,
+            "h264_encoded",
+            &[
+                ("frames", &self.frames.to_string()),
+                ("bytes", &bytes.to_string()),
+                (
+                    "duration_ms",
+                    &self.started.elapsed().as_millis().to_string(),
+                ),
+                ("width", &self.width.to_string()),
+                ("height", &self.height.to_string()),
+            ],
+        );
+        capture_control.stop();
+        Ok(())
+    }
+}
+
+pub fn encode(index: usize) -> Result<(), AnyError> {
+    let monitor = Monitor::from_index(index)?;
+    let flags = EncodeFlags {
+        name: monitor.name()?,
+        index,
+        width: monitor.width()?,
+        height: monitor.height()?,
+    };
+    EncodeProbe::start(settings(
+        monitor,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(ENCODE_FPS))),
+        flags,
     ))?;
     Ok(())
 }
