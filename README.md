@@ -2,7 +2,7 @@
 
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También incluye una prueba local del encoder H.264, pero todavía no envía ni decodifica vídeo comprimido ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede codificar y enviar una prueba H.264 que el cliente valida en memoria, pero todavía no decodifica vídeo comprimido ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
 
 ## Requisitos
 
@@ -54,7 +54,21 @@ Para comprobar el encoder H.264 de Windows sin guardar ni enviar el contenido de
 cargo run -p windowdeck-host -- --encode-test
 ```
 
-Puedes indicar otro monitor, por ejemplo `--encode-test 2`. La prueba codifica 60 frames a 30 FPS y 4 Mbps en memoria, muestra el tamaño resultante y termina. Usa la resolución actual de la pantalla; el transporte H.264 y los 1280 × 800 finales se integrarán después.
+Puedes indicar otro monitor, por ejemplo `--encode-test 2`. La prueba codifica 60 frames a 30 FPS y 4 Mbps en memoria, muestra el tamaño resultante y termina. Usa la resolución actual de la pantalla.
+
+Para probar el mismo segmento H.264 a través de la red, inicia el host:
+
+```powershell
+cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150
+```
+
+Y ejecuta el receptor desde el otro equipo o una segunda terminal:
+
+```bash
+cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test
+```
+
+El cliente reensambla los fragmentos, comprueba el contenedor MP4 y termina sin guardar la pantalla. Es una prueba de transporte por lotes; el decoder y la emisión continua de baja latencia son los siguientes pasos.
 
 ## Comprobar
 

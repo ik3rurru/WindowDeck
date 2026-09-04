@@ -42,7 +42,11 @@ fn main() {
 
 fn run() -> Result<(), AnyError> {
     match parse_mode(env::args().skip(1))? {
-        Mode::Serve { address, monitor } => run_server(address, monitor),
+        Mode::Serve {
+            address,
+            monitor,
+            codec,
+        } => run_server(address, monitor, codec),
         Mode::CaptureTest(index) => capture_test(index),
         Mode::EncodeTest(index) => encode_test(index),
     }
@@ -53,6 +57,7 @@ enum Mode {
     Serve {
         address: String,
         monitor: Option<usize>,
+        codec: VideoCodec,
     },
     CaptureTest(usize),
     EncodeTest(usize),
@@ -76,7 +81,7 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
                 Mode::EncodeTest(index)
             })
         }
-        Some("--capture") => {
+        Some(command @ ("--capture" | "--h264")) => {
             let index = args
                 .next()
                 .ok_or("falta el índice de monitor")?
@@ -84,11 +89,16 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
                 .map_err(|_| "índice de monitor inválido")?;
             let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
             if index == 0 || args.next().is_some() {
-                return Err("usa --capture N [DIRECCIÓN], con N mayor que cero");
+                return Err("usa --capture N [DIRECCIÓN] o --h264 N [DIRECCIÓN]");
             }
             Ok(Mode::Serve {
                 address,
                 monitor: Some(index),
+                codec: if command == "--h264" {
+                    VideoCodec::H264
+                } else {
+                    VideoCodec::Rgb332
+                },
             })
         }
         Some(value) if value.starts_with('-') => Err("opción desconocida"),
@@ -99,6 +109,7 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
             Ok(Mode::Serve {
                 address: address.unwrap_or(DEFAULT_ADDRESS).into(),
                 monitor: None,
+                codec: VideoCodec::Rgb332,
             })
         }
     }
@@ -124,7 +135,7 @@ fn encode_test(_index: usize) -> Result<(), AnyError> {
     Err("la codificación de pantalla solo está disponible en Windows".into())
 }
 
-fn run_server(address: String, monitor: Option<usize>) -> Result<(), AnyError> {
+fn run_server(address: String, monitor: Option<usize>, codec: VideoCodec) -> Result<(), AnyError> {
     #[cfg(not(windows))]
     if monitor.is_some() {
         return Err("la captura de pantalla solo está disponible en Windows".into());
@@ -139,7 +150,7 @@ fn run_server(address: String, monitor: Option<usize>) -> Result<(), AnyError> {
             "client_connected",
             &[("peer", &peer.to_string())],
         );
-        if let Err(error) = serve(stream, monitor) {
+        if let Err(error) = serve(stream, monitor, codec) {
             emit(
                 Level::Warn,
                 "session_closed",
@@ -149,7 +160,7 @@ fn run_server(address: String, monitor: Option<usize>) -> Result<(), AnyError> {
     }
 }
 
-fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> {
+fn serve(mut stream: TcpStream, monitor: Option<usize>, codec: VideoCodec) -> Result<(), AnyError> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut state = ConnectionState::AwaitingHello;
@@ -168,11 +179,23 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> 
         },
     )?;
 
+    let (width, height, fps) = stream_format(codec, monitor)?;
     match read_message(&mut stream)? {
-        Message::Capabilities { codecs, .. } if codecs & VideoCodec::Rgb332.capability() != 0 => {
+        Message::Capabilities {
+            max_width,
+            max_height,
+            max_fps,
+            codecs,
+        } if codecs & codec.capability() != 0
+            && width <= max_width
+            && height <= max_height
+            && fps <= max_fps =>
+        {
             state = state.apply(ConnectionEvent::Negotiated)?;
         }
-        Message::Capabilities { .. } => return Err("el cliente no admite RGB332".into()),
+        Message::Capabilities { .. } => {
+            return Err("el cliente no admite la configuración solicitada".into());
+        }
         _ => return Err("se esperaba Capabilities".into()),
     }
 
@@ -181,17 +204,17 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> 
         &mut stream,
         &Message::SessionConfig {
             session_id,
-            width: WIDTH,
-            height: HEIGHT,
-            fps: FPS,
-            codec: VideoCodec::Rgb332,
+            width,
+            height,
+            fps,
+            codec,
         },
     )?;
     write_message(&mut stream, &Message::Start)?;
     state.apply(ConnectionEvent::Started)?;
 
     if let Some(index) = monitor {
-        return capture_stream(stream, index, session_id);
+        return capture_stream(stream, index, session_id, codec);
     }
 
     let started = Instant::now();
@@ -231,13 +254,44 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> 
 }
 
 #[cfg(windows)]
-fn capture_stream(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
-    capture::stream(stream, index, session_id)
+fn capture_stream(
+    stream: TcpStream,
+    index: usize,
+    session_id: u64,
+    codec: VideoCodec,
+) -> Result<(), AnyError> {
+    match codec {
+        VideoCodec::Rgb332 => capture::stream(stream, index, session_id),
+        VideoCodec::H264 => capture::stream_h264(stream, index, session_id),
+    }
 }
 
 #[cfg(not(windows))]
-fn capture_stream(_stream: TcpStream, _index: usize, _session_id: u64) -> Result<(), AnyError> {
+fn capture_stream(
+    _stream: TcpStream,
+    _index: usize,
+    _session_id: u64,
+    _codec: VideoCodec,
+) -> Result<(), AnyError> {
     Err("la captura de pantalla solo está disponible en Windows".into())
+}
+
+fn stream_format(codec: VideoCodec, monitor: Option<usize>) -> Result<(u16, u16, u16), AnyError> {
+    match codec {
+        VideoCodec::Rgb332 => Ok((WIDTH, HEIGHT, FPS)),
+        VideoCodec::H264 => h264_format(monitor.ok_or("H.264 requiere un monitor")?),
+    }
+}
+
+#[cfg(windows)]
+fn h264_format(index: usize) -> Result<(u16, u16, u16), AnyError> {
+    let (width, height) = capture::size(index)?;
+    Ok((width, height, capture::ENCODE_FPS as u16))
+}
+
+#[cfg(not(windows))]
+fn h264_format(_index: usize) -> Result<(u16, u16, u16), AnyError> {
+    Err("la codificación H.264 solo está disponible en Windows".into())
 }
 
 fn pattern(frame: u64, captured_micros: u64) -> Vec<u8> {
@@ -295,6 +349,7 @@ mod tests {
             Ok(Mode::Serve {
                 address: DEFAULT_ADDRESS.into(),
                 monitor: None,
+                codec: VideoCodec::Rgb332,
             })
         );
         assert_eq!(
@@ -310,6 +365,15 @@ mod tests {
             Ok(Mode::Serve {
                 address: "127.0.0.1:9".into(),
                 monitor: Some(2),
+                codec: VideoCodec::Rgb332,
+            })
+        );
+        assert_eq!(
+            parse_mode(["--h264".into(), "1".into()]),
+            Ok(Mode::Serve {
+                address: DEFAULT_ADDRESS.into(),
+                monitor: Some(1),
+                codec: VideoCodec::H264,
             })
         );
         assert!(parse_mode(["--capture-test".into(), "0".into()]).is_err());

@@ -1,6 +1,7 @@
 use softbuffer::{Context, Surface};
 use std::env;
 use std::error::Error;
+use std::io::Read;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -22,6 +23,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 const DEFAULT_ADDRESS: &str = "127.0.0.1:48150";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_H264_TEST_SIZE: usize = 4 * 1024 * 1024;
 
 fn main() {
     if let Err(error) = run() {
@@ -36,7 +38,10 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let options = parse_options(env::args().skip(1))?;
-    let (stream, session_id, width, height) = connect(&options.address)?;
+    if options.h264_test {
+        return receive_h264_test(&options.address);
+    }
+    let (stream, session_id, width, height) = connect(&options.address, VideoCodec::Rgb332)?;
     let shutdown = stream.try_clone()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));
@@ -71,26 +76,33 @@ fn run() -> Result<(), Box<dyn Error>> {
 struct Options {
     address: String,
     fullscreen: bool,
+    h264_test: bool,
 }
 
 fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'static str> {
     let mut address = None;
     let mut fullscreen = false;
+    let mut h264_test = false;
     for argument in args {
         match argument.as_str() {
             "--fullscreen" => fullscreen = true,
+            "--h264-test" => h264_test = true,
             _ if argument.starts_with('-') => return Err("opción desconocida"),
             _ if address.is_none() => address = Some(argument),
             _ => return Err("solo se admite una dirección"),
         }
     }
+    if fullscreen && h264_test {
+        return Err("--fullscreen no se usa con --h264-test");
+    }
     Ok(Options {
         address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
         fullscreen,
+        h264_test,
     })
 }
 
-fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> {
+fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> {
     let socket: SocketAddr = address
         .parse()
         .map_err(|_| "dirección inválida; usa IP:puerto")?;
@@ -117,10 +129,18 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
     write_message(
         &mut stream,
         &Message::Capabilities {
-            max_width: 1280,
-            max_height: 800,
+            max_width: if codec == VideoCodec::H264 {
+                u16::MAX
+            } else {
+                1280
+            },
+            max_height: if codec == VideoCodec::H264 {
+                u16::MAX
+            } else {
+                800
+            },
             max_fps: 60,
-            codecs: VideoCodec::Rgb332.capability(),
+            codecs: codec.capability(),
         },
     )?;
     let (session_id, width, height) = match read_message(&mut stream)? {
@@ -129,8 +149,8 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
             width,
             height,
             fps,
-            codec,
-        } if width > 0 && height > 0 && fps > 0 && codec == VideoCodec::Rgb332 => {
+            codec: configured_codec,
+        } if width > 0 && height > 0 && fps > 0 && configured_codec == codec => {
             emit(
                 Level::Info,
                 "session_configured",
@@ -138,6 +158,14 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
                     ("width", &width.to_string()),
                     ("height", &height.to_string()),
                     ("fps", &fps.to_string()),
+                    (
+                        "codec",
+                        if codec == VideoCodec::H264 {
+                            "h264"
+                        } else {
+                            "rgb332"
+                        },
+                    ),
                 ],
             );
             state = state.apply(ConnectionEvent::Negotiated)?;
@@ -155,6 +183,78 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
         _ => return Err("se esperaba Start".into()),
     }
     Ok((stream, session_id, width, height))
+}
+
+fn receive_h264_test(address: &str) -> Result<(), Box<dyn Error>> {
+    let (mut stream, session_id, ..) = connect(address, VideoCodec::H264)?;
+    let (bytes, fragments) = receive_h264_segment(&mut stream, session_id)?;
+    emit(
+        Level::Info,
+        "h264_received",
+        &[
+            ("bytes", &bytes.to_string()),
+            ("fragments", &fragments.to_string()),
+        ],
+    );
+    Ok(())
+}
+
+fn receive_h264_segment(
+    mut reader: impl Read,
+    session_id: u64,
+) -> Result<(usize, u16), Box<dyn Error>> {
+    let mut bytes = Vec::new();
+    let mut fragment_count = None;
+    let mut next_fragment = 0_u16;
+
+    loop {
+        match read_message(&mut reader)? {
+            Message::VideoChunk {
+                session_id: chunk_session_id,
+                frame_number,
+                fragment_index,
+                fragment_count: chunk_count,
+                keyframe,
+                payload,
+                ..
+            } => {
+                if chunk_session_id != session_id || frame_number != 0 {
+                    return Err("fragmento H.264 de otra sesión o segmento".into());
+                }
+                if fragment_index != next_fragment
+                    || fragment_count.is_some_and(|count| count != chunk_count)
+                {
+                    return Err("fragmentos H.264 desordenados".into());
+                }
+                if next_fragment == 0 {
+                    if !keyframe {
+                        return Err("el segmento H.264 no comienza en un keyframe".into());
+                    }
+                    fragment_count = Some(chunk_count);
+                }
+                let new_len = bytes
+                    .len()
+                    .checked_add(payload.len())
+                    .ok_or("tamaño H.264 desbordado")?;
+                if new_len > MAX_H264_TEST_SIZE {
+                    return Err("segmento H.264 mayor de 4 MiB".into());
+                }
+                bytes.extend_from_slice(&payload);
+                next_fragment += 1;
+            }
+            Message::Stop if fragment_count == Some(next_fragment) => break,
+            Message::Stop => return Err("segmento H.264 incompleto".into()),
+            Message::Error { code, message } => {
+                return Err(format!("host error {code}: {message}").into());
+            }
+            _ => return Err("mensaje inesperado durante la prueba H.264".into()),
+        }
+    }
+
+    if bytes.get(4..8) != Some(b"ftyp".as_slice()) {
+        return Err("la salida H.264 no contiene un contenedor MP4 válido".into());
+    }
+    Ok((bytes.len(), next_fragment))
 }
 
 #[derive(Debug)]
@@ -294,7 +394,7 @@ fn receive_frames(
                 if stopping.load(Ordering::Relaxed) {
                     return;
                 }
-                match connect(&address) {
+                match connect(&address, VideoCodec::Rgb332) {
                     Ok((new_stream, new_session_id, ..)) => {
                         let Ok(shutdown) = new_stream.try_clone() else {
                             continue;
@@ -620,6 +720,7 @@ mod tests {
             Ok(Options {
                 address: "192.0.2.1:48150".into(),
                 fullscreen: true,
+                h264_test: false,
             })
         );
         assert_eq!(
@@ -627,8 +728,44 @@ mod tests {
             Ok(Options {
                 address: DEFAULT_ADDRESS.into(),
                 fullscreen: false,
+                h264_test: false,
             })
         );
+        assert_eq!(
+            parse_options(["--h264-test".into()]),
+            Ok(Options {
+                address: DEFAULT_ADDRESS.into(),
+                fullscreen: false,
+                h264_test: true,
+            })
+        );
+        assert!(parse_options(["--h264-test".into(), "--fullscreen".into()]).is_err());
         assert!(parse_options(["--unknown".into()]).is_err());
+    }
+
+    #[test]
+    fn h264_test_reassembles_ordered_fragments() {
+        let mut stream = Vec::new();
+        for (fragment_index, payload) in [(0, b"\0\0\0\x18".as_slice()), (1, b"ftyp".as_slice())] {
+            write_message(
+                &mut stream,
+                &Message::VideoChunk {
+                    session_id: 42,
+                    frame_number: 0,
+                    captured_micros: 0,
+                    fragment_index,
+                    fragment_count: 2,
+                    keyframe: true,
+                    payload: payload.to_vec(),
+                },
+            )
+            .expect("valid fragment");
+        }
+        write_message(&mut stream, &Message::Stop).expect("valid stop");
+
+        assert_eq!(
+            receive_h264_segment(stream.as_slice(), 42).expect("valid segment"),
+            (8, 2)
+        );
     }
 }

@@ -434,7 +434,7 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
-Estado actual: la captura ya alimenta el encoder H.264 de Windows directamente desde D3D11 y se ha validado su salida en memoria. El protocolo v3 negocia el códec y admite fragmentos de vídeo codificado con límites explícitos; aún falta conectarlos al encoder y al decoder.
+Estado actual: la captura alimenta el encoder H.264 de Windows directamente desde D3D11. Host y cliente ya pueden negociar, enviar, reensamblar y validar en memoria un segmento real mediante fragmentos acotados del protocolo v3. Aún faltan la emisión continua y el decoder.
 
 Tareas:
 

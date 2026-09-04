@@ -9,4 +9,4 @@ Validar primero Media Foundation mediante el encoder que ya expone `windows-capt
 
 ## Consecuencias
 
-Confirmamos captura y codificación antes de cambiar el protocolo o el cliente. Esta prueba no representa aún una ruta de baja latencia: el transporte, los keyframes, el escalado a 1280 × 800 y la decodificación en SteamOS quedan para los siguientes incrementos.
+Confirmamos captura y codificación antes de cambiar el protocolo o el cliente. El segmento resultante puede enviarse ahora con el modo de diagnóstico descrito en el ADR 0005, pero todavía no representa una ruta continua de baja latencia. Los keyframes, el escalado a 1280 × 800 y la decodificación en SteamOS quedan para los siguientes incrementos.

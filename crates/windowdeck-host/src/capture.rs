@@ -2,8 +2,8 @@ use super::AnyError;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
-use windowdeck_protocol::{Message, write_message};
-use windows::Storage::Streams::InMemoryRandomAccessStream;
+use windowdeck_protocol::{MAX_VIDEO_PAYLOAD, Message, write_message};
+use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
 use windows::core::Interface;
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
@@ -18,7 +18,7 @@ use windows_capture::settings::{
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 
-const ENCODE_FPS: u32 = 30;
+pub(super) const ENCODE_FPS: u32 = 30;
 const ENCODE_BITRATE: u32 = 4_000_000;
 const ENCODE_FRAMES: u64 = 60;
 
@@ -76,6 +76,7 @@ struct EncodeFlags {
     index: usize,
     width: u32,
     height: u32,
+    network: Option<(TcpStream, u64)>,
 }
 
 struct EncodeProbe {
@@ -85,6 +86,7 @@ struct EncodeProbe {
     frames: u64,
     width: u32,
     height: u32,
+    network: Option<(TcpStream, u64)>,
 }
 
 impl GraphicsCaptureApiHandler for EncodeProbe {
@@ -122,6 +124,7 @@ impl GraphicsCaptureApiHandler for EncodeProbe {
             frames: 0,
             width: flags.width,
             height: flags.height,
+            network: flags.network,
         })
     }
 
@@ -146,6 +149,18 @@ impl GraphicsCaptureApiHandler for EncodeProbe {
         let bytes = self.stream.Size()?;
         if bytes == 0 {
             return Err("el codificador H.264 no produjo datos".into());
+        }
+        if let Some((stream, session_id)) = &mut self.network {
+            let encoded = read_stream(&self.stream, bytes)?;
+            let fragments = send_h264(stream, *session_id, &encoded)?;
+            emit(
+                Level::Info,
+                "h264_sent",
+                &[
+                    ("bytes", &bytes.to_string()),
+                    ("fragments", &fragments.to_string()),
+                ],
+            );
         }
         emit(
             Level::Info,
@@ -173,6 +188,7 @@ pub fn encode(index: usize) -> Result<(), AnyError> {
         index,
         width: monitor.width()?,
         height: monitor.height()?,
+        network: None,
     };
     EncodeProbe::start(settings(
         monitor,
@@ -180,6 +196,59 @@ pub fn encode(index: usize) -> Result<(), AnyError> {
         flags,
     ))?;
     Ok(())
+}
+
+pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
+    let monitor = Monitor::from_index(index)?;
+    let flags = EncodeFlags {
+        name: monitor.name()?,
+        index,
+        width: monitor.width()?,
+        height: monitor.height()?,
+        network: Some((stream, session_id)),
+    };
+    EncodeProbe::start(settings(
+        monitor,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(ENCODE_FPS))),
+        flags,
+    ))?;
+    Ok(())
+}
+
+pub fn size(index: usize) -> Result<(u16, u16), AnyError> {
+    let monitor = Monitor::from_index(index)?;
+    Ok((monitor.width()?.try_into()?, monitor.height()?.try_into()?))
+}
+
+fn read_stream(stream: &InMemoryRandomAccessStream, size: u64) -> Result<Vec<u8>, AnyError> {
+    let size = u32::try_from(size).map_err(|_| "salida H.264 demasiado grande")?;
+    let input = stream.GetInputStreamAt(0)?;
+    let reader = DataReader::CreateDataReader(&input)?;
+    reader.LoadAsync(size)?.join()?;
+    let mut bytes = vec![0; size as usize];
+    reader.ReadBytes(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn send_h264(stream: &mut TcpStream, session_id: u64, bytes: &[u8]) -> Result<u16, AnyError> {
+    let fragment_count = u16::try_from(bytes.len().div_ceil(MAX_VIDEO_PAYLOAD))
+        .map_err(|_| "salida H.264 demasiado grande")?;
+    for (fragment_index, payload) in bytes.chunks(MAX_VIDEO_PAYLOAD).enumerate() {
+        write_message(
+            &mut *stream,
+            &Message::VideoChunk {
+                session_id,
+                frame_number: 0,
+                captured_micros: 0,
+                fragment_index: fragment_index.try_into()?,
+                fragment_count,
+                keyframe: true,
+                payload: payload.to_vec(),
+            },
+        )?;
+    }
+    write_message(stream, &Message::Stop)?;
+    Ok(fragment_count)
 }
 
 struct StreamFlags {

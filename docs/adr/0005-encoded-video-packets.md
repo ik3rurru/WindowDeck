@@ -9,4 +9,4 @@ La versión 3 del protocolo negocia el códec por sesión y añade fragmentos de
 
 ## Consecuencias
 
-El transporte no depende de una implementación concreta del encoder y puede llevar H.264 sin relajar sus límites de memoria. Host y cliente continúan negociando RGB332 hasta que el cliente incorpore un decoder H.264; anunciar soporte antes produciría sesiones imposibles de mostrar.
+El transporte no depende de una implementación concreta del encoder y puede llevar H.264 sin relajar sus límites de memoria. El flujo visual continúa negociando RGB332; un modo de diagnóstico separado negocia H.264, reensambla un segmento MP4 real con un límite de 4 MiB y lo valida sin intentar mostrarlo.
