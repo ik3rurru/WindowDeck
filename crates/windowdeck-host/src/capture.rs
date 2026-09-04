@@ -1,5 +1,8 @@
 use super::AnyError;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
+use windowdeck_protocol::{Message, write_message};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -50,15 +53,166 @@ impl GraphicsCaptureApiHandler for CaptureProbe {
 pub fn run(index: usize) -> Result<(), AnyError> {
     let monitor = Monitor::from_index(index)?;
     let name = monitor.name()?;
-    CaptureProbe::start(Settings::new(
+    CaptureProbe::start(settings(
+        monitor,
+        MinimumUpdateIntervalSettings::Default,
+        (name, index),
+    ))?;
+    Ok(())
+}
+
+struct StreamFlags {
+    stream: TcpStream,
+    session_id: u64,
+    name: String,
+    index: usize,
+}
+
+struct CaptureStream {
+    stream: TcpStream,
+    session_id: u64,
+    started: Instant,
+    number: u64,
+    scratch: Vec<u8>,
+    pixels: Vec<u8>,
+}
+
+impl GraphicsCaptureApiHandler for CaptureStream {
+    type Flags = StreamFlags;
+    type Error = AnyError;
+
+    fn new(context: Context<Self::Flags>) -> Result<Self, Self::Error> {
+        let flags = context.flags;
+        emit(
+            Level::Info,
+            "capture_stream_started",
+            &[("monitor", &flags.index.to_string()), ("name", &flags.name)],
+        );
+        Ok(Self {
+            stream: flags.stream,
+            session_id: flags.session_id,
+            started: Instant::now(),
+            number: 0,
+            scratch: Vec::new(),
+            pixels: Vec::new(),
+        })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut Frame<'_>,
+        _capture_control: InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        let (source_width, source_height) = (frame.width() as usize, frame.height() as usize);
+        let buffer = frame.buffer()?;
+        let source = buffer.as_nopadding_buffer(&mut self.scratch);
+        // ponytail: CPU scaling proves the path; replace it with GPU scaling plus H.264 in Hito 3.
+        downscale_bgra(source, source_width, source_height, &mut self.pixels)?;
+        write_message(
+            &mut self.stream,
+            &Message::Frame {
+                session_id: self.session_id,
+                number: self.number,
+                captured_micros: self.started.elapsed().as_micros() as u64,
+                width: super::WIDTH,
+                height: super::HEIGHT,
+                pixels: self.pixels.clone(),
+            },
+        )?;
+        self.number += 1;
+        if self.number.is_multiple_of(u64::from(super::FPS)) {
+            emit(
+                Level::Info,
+                "capture_metrics",
+                &[
+                    ("frames_sent", &self.number.to_string()),
+                    (
+                        "fps",
+                        &format!(
+                            "{:.1}",
+                            self.number as f64 / self.started.elapsed().as_secs_f64()
+                        ),
+                    ),
+                ],
+            );
+        }
+        Ok(())
+    }
+}
+
+pub fn stream(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
+    let monitor = Monitor::from_index(index)?;
+    let flags = StreamFlags {
+        stream,
+        session_id,
+        name: monitor.name()?,
+        index,
+    };
+    CaptureStream::start(settings(
+        monitor,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(super::FPS))),
+        flags,
+    ))?;
+    Ok(())
+}
+
+fn settings<Flags>(
+    monitor: Monitor,
+    interval: MinimumUpdateIntervalSettings,
+    flags: Flags,
+) -> Settings<Flags, Monitor> {
+    Settings::new(
         monitor,
         CursorCaptureSettings::WithCursor,
         DrawBorderSettings::Default,
         SecondaryWindowSettings::Default,
-        MinimumUpdateIntervalSettings::Default,
+        interval,
         DirtyRegionSettings::Default,
         ColorFormat::Bgra8,
-        (name, index),
-    ))?;
+        flags,
+    )
+}
+
+fn downscale_bgra(
+    source: &[u8],
+    source_width: usize,
+    source_height: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), &'static str> {
+    let expected = source_width
+        .checked_mul(source_height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or("dimensiones de captura desbordadas")?;
+    if source_width == 0 || source_height == 0 || source.len() != expected {
+        return Err("buffer de captura inválido");
+    }
+    output.clear();
+    output.reserve(usize::from(super::WIDTH) * usize::from(super::HEIGHT));
+    for y in 0..usize::from(super::HEIGHT) {
+        for x in 0..usize::from(super::WIDTH) {
+            let source_x = x * source_width / usize::from(super::WIDTH);
+            let source_y = y * source_height / usize::from(super::HEIGHT);
+            let offset = (source_y * source_width + source_x) * 4;
+            let (blue, green, red) = (source[offset], source[offset + 1], source[offset + 2]);
+            output.push((red & 0xe0) | ((green & 0xe0) >> 3) | (blue >> 6));
+        }
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bgra_is_downscaled_to_rgb332() {
+        let mut output = Vec::new();
+        downscale_bgra(&[0, 0, 255, 255], 1, 1, &mut output).expect("valid pixel");
+        assert_eq!(
+            output.len(),
+            usize::from(super::super::WIDTH) * usize::from(super::super::HEIGHT)
+        );
+        assert!(output.iter().all(|pixel| *pixel == 0xe0));
+        assert!(downscale_bgra(&[], 1, 1, &mut output).is_err());
+    }
 }

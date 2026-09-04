@@ -40,15 +40,18 @@ fn main() {
 
 fn run() -> Result<(), AnyError> {
     match parse_mode(env::args().skip(1))? {
-        Mode::Serve(address) => run_server(address),
-        Mode::Capture(index) => capture_test(index),
+        Mode::Serve { address, monitor } => run_server(address, monitor),
+        Mode::CaptureTest(index) => capture_test(index),
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
-    Serve(String),
-    Capture(usize),
+    Serve {
+        address: String,
+        monitor: Option<usize>,
+    },
+    CaptureTest(usize),
 }
 
 fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
@@ -63,14 +66,32 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
             if index == 0 || args.next().is_some() {
                 return Err("usa --capture-test [N], con N mayor que cero");
             }
-            Ok(Mode::Capture(index))
+            Ok(Mode::CaptureTest(index))
+        }
+        Some("--capture") => {
+            let index = args
+                .next()
+                .ok_or("falta el índice de monitor")?
+                .parse()
+                .map_err(|_| "índice de monitor inválido")?;
+            let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
+            if index == 0 || args.next().is_some() {
+                return Err("usa --capture N [DIRECCIÓN], con N mayor que cero");
+            }
+            Ok(Mode::Serve {
+                address,
+                monitor: Some(index),
+            })
         }
         Some(value) if value.starts_with('-') => Err("opción desconocida"),
         address => {
             if args.next().is_some() {
                 return Err("solo se admite una dirección");
             }
-            Ok(Mode::Serve(address.unwrap_or(DEFAULT_ADDRESS).into()))
+            Ok(Mode::Serve {
+                address: address.unwrap_or(DEFAULT_ADDRESS).into(),
+                monitor: None,
+            })
         }
     }
 }
@@ -85,7 +106,11 @@ fn capture_test(_index: usize) -> Result<(), AnyError> {
     Err("la captura de pantalla solo está disponible en Windows".into())
 }
 
-fn run_server(address: String) -> Result<(), AnyError> {
+fn run_server(address: String, monitor: Option<usize>) -> Result<(), AnyError> {
+    #[cfg(not(windows))]
+    if monitor.is_some() {
+        return Err("la captura de pantalla solo está disponible en Windows".into());
+    }
     let listener = TcpListener::bind(&address)?;
     emit(Level::Info, "host_listening", &[("address", &address)]);
 
@@ -96,7 +121,7 @@ fn run_server(address: String) -> Result<(), AnyError> {
             "client_connected",
             &[("peer", &peer.to_string())],
         );
-        if let Err(error) = serve(stream) {
+        if let Err(error) = serve(stream, monitor) {
             emit(
                 Level::Warn,
                 "session_closed",
@@ -106,7 +131,7 @@ fn run_server(address: String) -> Result<(), AnyError> {
     }
 }
 
-fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
+fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut state = ConnectionState::AwaitingHello;
@@ -143,6 +168,10 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
     write_message(&mut stream, &Message::Start)?;
     state.apply(ConnectionEvent::Started)?;
 
+    if let Some(index) = monitor {
+        return capture_stream(stream, index, session_id);
+    }
+
     let started = Instant::now();
     let mut number = 0_u64;
     loop {
@@ -151,6 +180,7 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
         write_message(
             &mut stream,
             &Message::Frame {
+                session_id,
                 number,
                 captured_micros,
                 width: WIDTH,
@@ -178,9 +208,25 @@ fn serve(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
     }
 }
 
+#[cfg(windows)]
+fn capture_stream(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
+    capture::stream(stream, index, session_id)
+}
+
+#[cfg(not(windows))]
+fn capture_stream(_stream: TcpStream, _index: usize, _session_id: u64) -> Result<(), AnyError> {
+    Err("la captura de pantalla solo está disponible en Windows".into())
+}
+
 fn pattern(frame: u64, captured_micros: u64) -> Vec<u8> {
     let mut pixels = (0..usize::from(WIDTH) * usize::from(HEIGHT))
-        .map(|index| (((index % usize::from(WIDTH)) as u64 + frame) % 9) as u8)
+        .map(|index| {
+            let x = index % usize::from(WIDTH);
+            let y = index / usize::from(WIDTH);
+            ((((x as u64 + frame) / 8 % 8) as u8) << 5)
+                | ((((y as u64 + frame / 2) / 5 % 8) as u8) << 2)
+                | ((((x + y) as u64 + frame) / 16 % 4) as u8)
+        })
         .collect::<Vec<_>>();
     draw_number(&mut pixels, 4, 8, frame);
     draw_number(&mut pixels, 4, 40, captured_micros / 1_000);
@@ -200,7 +246,7 @@ fn draw_number(pixels: &mut [u8], x: usize, y: usize, number: u64) {
                     let pixel_x = x + position * 12 + (bit % 5) * 2 + offset_x;
                     let pixel_y = y + (bit / 5) * 2 + offset_y;
                     if pixel_x < usize::from(WIDTH) && pixel_y < usize::from(HEIGHT) {
-                        pixels[pixel_y * usize::from(WIDTH) + pixel_x] = 9;
+                        pixels[pixel_y * usize::from(WIDTH) + pixel_x] = u8::MAX;
                     }
                 }
             }
@@ -216,7 +262,7 @@ mod tests {
     fn pattern_has_expected_size_moves_and_contains_counters() {
         let first = pattern(0, 0);
         assert_eq!(first.len(), usize::from(WIDTH) * usize::from(HEIGHT));
-        assert!(first.contains(&9));
+        assert!(first.contains(&u8::MAX));
         assert_ne!(first, pattern(1, 1_000));
     }
 
@@ -224,11 +270,21 @@ mod tests {
     fn mode_accepts_server_address_or_capture_monitor() {
         assert_eq!(
             parse_mode(Vec::new()),
-            Ok(Mode::Serve(DEFAULT_ADDRESS.into()))
+            Ok(Mode::Serve {
+                address: DEFAULT_ADDRESS.into(),
+                monitor: None,
+            })
         );
         assert_eq!(
             parse_mode(["--capture-test".into(), "2".into()]),
-            Ok(Mode::Capture(2))
+            Ok(Mode::CaptureTest(2))
+        );
+        assert_eq!(
+            parse_mode(["--capture".into(), "2".into(), "127.0.0.1:9".into()]),
+            Ok(Mode::Serve {
+                address: "127.0.0.1:9".into(),
+                monitor: Some(2),
+            })
         );
         assert!(parse_mode(["--capture-test".into(), "0".into()]).is_err());
         assert!(parse_mode(["--unknown".into()]).is_err());

@@ -2,7 +2,7 @@
 
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: por ahora valida el protocolo y una conexión TCP manual con un patrón sintético pequeño. Todavía no crea un monitor virtual ni captura la pantalla. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo y una conexión TCP manual con un patrón sintético o una vista previa de una pantalla real de Windows. Todavía no crea un monitor virtual ni codifica vídeo. El HDMI del dock de Steam Deck es una salida, no una entrada.
 
 ## Requisitos
 
@@ -39,6 +39,14 @@ cargo run -p windowdeck-host -- --capture-test
 ```
 
 Puedes añadir el índice de otro monitor, por ejemplo `--capture-test 2`. La prueba confirma la recepción de una textura D3D11 y termina tras el primer frame.
+
+Para transmitir una vista previa del primer monitor, inicia el host así y usa el cliente normalmente:
+
+```powershell
+cargo run -p windowdeck-host -- --capture 1 0.0.0.0:48150
+```
+
+Esta ruta temporal reduce la captura a 128 × 80 y RGB332 antes de enviarla. Sirve para validar el recorrido completo; H.264 y la resolución final pertenecen al siguiente hito.
 
 ## Comprobar
 

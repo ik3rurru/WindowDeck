@@ -34,13 +34,14 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let options = parse_options(env::args().skip(1))?;
-    let (stream, width, height) = connect(&options.address)?;
+    let (stream, session_id, width, height) = connect(&options.address)?;
     let shutdown = stream.try_clone()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));
     let event_loop = EventLoop::<ClientEvent>::with_user_event().build()?;
     let worker = receive_frames(
         stream,
+        session_id,
         options.address,
         Arc::clone(&latest),
         Arc::clone(&stopping),
@@ -87,7 +88,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     })
 }
 
-fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
+fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> {
     let socket: SocketAddr = address
         .parse()
         .map_err(|_| "dirección inválida; usa IP:puerto")?;
@@ -119,9 +120,12 @@ fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
             max_fps: 60,
         },
     )?;
-    let (width, height) = match read_message(&mut stream)? {
+    let (session_id, width, height) = match read_message(&mut stream)? {
         Message::SessionConfig {
-            width, height, fps, ..
+            session_id,
+            width,
+            height,
+            fps,
         } if width > 0 && height > 0 && fps > 0 => {
             emit(
                 Level::Info,
@@ -133,7 +137,7 @@ fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
                 ],
             );
             state = state.apply(ConnectionEvent::Negotiated)?;
-            (width, height)
+            (session_id, width, height)
         }
         Message::SessionConfig { .. } => return Err("configuración de sesión inválida".into()),
         _ => return Err("se esperaba SessionConfig".into()),
@@ -144,7 +148,7 @@ fn connect(address: &str) -> Result<(TcpStream, u16, u16), Box<dyn Error>> {
         }
         _ => return Err("se esperaba Start".into()),
     }
-    Ok((stream, width, height))
+    Ok((stream, session_id, width, height))
 }
 
 #[derive(Debug)]
@@ -165,6 +169,7 @@ enum ClientEvent {
 
 fn receive_frames(
     mut stream: TcpStream,
+    mut session_id: u64,
     address: String,
     latest: Arc<Mutex<Option<Frame>>>,
     stopping: Arc<AtomicBool>,
@@ -181,12 +186,19 @@ fn receive_frames(
             loop {
                 match read_message(&mut stream) {
                     Ok(Message::Frame {
+                        session_id: frame_session_id,
                         number,
                         width,
                         height,
                         pixels,
                         ..
                     }) => {
+                        if frame_session_id != session_id {
+                            let _ = proxy.send_event(ClientEvent::Failed(
+                                "frame recibido de otra sesión".into(),
+                            ));
+                            return;
+                        }
                         received += 1;
                         if let Some(previous) = previous {
                             lost += number.saturating_sub(previous + 1);
@@ -277,7 +289,7 @@ fn receive_frames(
                     return;
                 }
                 match connect(&address) {
-                    Ok((new_stream, ..)) => {
+                    Ok((new_stream, new_session_id, ..)) => {
                         let Ok(shutdown) = new_stream.try_clone() else {
                             continue;
                         };
@@ -288,6 +300,7 @@ fn receive_frames(
                             return;
                         }
                         stream = new_stream;
+                        session_id = new_session_id;
                         continue 'sessions;
                     }
                     Err(error) => emit(
@@ -548,8 +561,10 @@ fn draw_frame(
 }
 
 fn color(value: u8) -> u32 {
-    let intensity = u32::from(value.min(9)) * 25;
-    (intensity << 16) | ((255 - intensity) << 8) | 0x40
+    let red = u32::from(value >> 5) * 255 / 7;
+    let green = u32::from((value >> 2) & 7) * 255 / 7;
+    let blue = u32::from(value & 3) * 255 / 3;
+    (red << 16) | (green << 8) | blue
 }
 
 #[cfg(test)]
@@ -582,6 +597,14 @@ mod tests {
             pixels: vec![0, 1, 2],
         };
         assert!(draw_frame(&frame, 2, 2, &mut [0; 4]).is_err());
+    }
+
+    #[test]
+    fn rgb332_expands_to_display_color() {
+        assert_eq!(color(0xe0), 0x00ff_0000);
+        assert_eq!(color(0x1c), 0x0000_ff00);
+        assert_eq!(color(0x03), 0x0000_00ff);
+        assert_eq!(color(0xff), 0x00ff_ffff);
     }
 
     #[test]

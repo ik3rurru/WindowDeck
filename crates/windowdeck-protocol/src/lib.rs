@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::{self, Cursor, Read, Write};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,7 @@ pub enum Message {
         message: String,
     },
     Frame {
+        session_id: u64,
         number: u64,
         captured_micros: u64,
         width: u16,
@@ -141,6 +142,7 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             put_string(&mut output, message)?;
         }
         Message::Frame {
+            session_id,
             number,
             captured_micros,
             width,
@@ -154,6 +156,7 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
                     "pixel count does not match dimensions",
                 ));
             }
+            put_u64(&mut output, *session_id);
             put_u64(&mut output, *number);
             put_u64(&mut output, *captured_micros);
             put_u16(&mut output, *width);
@@ -202,6 +205,7 @@ fn decode(payload: &[u8]) -> Result<Message, ProtocolError> {
             message: take_string(&mut input)?,
         },
         9 => {
+            let session_id = take_u64(&mut input)?;
             let number = take_u64(&mut input)?;
             let captured_micros = take_u64(&mut input)?;
             let width = take_u16(&mut input)?;
@@ -215,6 +219,7 @@ fn decode(payload: &[u8]) -> Result<Message, ProtocolError> {
             let mut pixels = vec![0; pixel_count];
             input.read_exact(&mut pixels)?;
             Message::Frame {
+                session_id,
                 number,
                 captured_micros,
                 width,
@@ -329,6 +334,7 @@ mod tests {
                 message: "test".into(),
             },
             Message::Frame {
+                session_id: 42,
                 number: 3,
                 captured_micros: 9,
                 width: 2,
@@ -356,10 +362,10 @@ mod tests {
             Err(ProtocolError::Oversized(_))
         ));
 
-        let incompatible = [0, 0, 0, 3, 0, 2, 4];
+        let incompatible = [0, 0, 0, 3, 0, 3, 4];
         assert!(matches!(
             read_message(incompatible.as_slice()),
-            Err(ProtocolError::UnsupportedVersion(2))
+            Err(ProtocolError::UnsupportedVersion(3))
         ));
     }
 
