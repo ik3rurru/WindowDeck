@@ -4,7 +4,9 @@ use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windowdeck_diagnostics::{Level, emit};
-use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
+use windowdeck_protocol::{
+    ConnectionEvent, ConnectionState, Message, VideoCodec, read_message, write_message,
+};
 
 #[cfg(windows)]
 mod capture;
@@ -167,7 +169,10 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> 
     )?;
 
     match read_message(&mut stream)? {
-        Message::Capabilities { .. } => state = state.apply(ConnectionEvent::Negotiated)?,
+        Message::Capabilities { codecs, .. } if codecs & VideoCodec::Rgb332.capability() != 0 => {
+            state = state.apply(ConnectionEvent::Negotiated)?;
+        }
+        Message::Capabilities { .. } => return Err("el cliente no admite RGB332".into()),
         _ => return Err("se esperaba Capabilities".into()),
     }
 
@@ -179,6 +184,7 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>) -> Result<(), AnyError> 
             width: WIDTH,
             height: HEIGHT,
             fps: FPS,
+            codec: VideoCodec::Rgb332,
         },
     )?;
     write_message(&mut stream, &Message::Start)?;

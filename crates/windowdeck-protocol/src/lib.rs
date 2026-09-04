@@ -1,8 +1,23 @@
 use std::fmt;
 use std::io::{self, Cursor, Read, Write};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+const VIDEO_CHUNK_OVERHEAD: usize = 32;
+pub const MAX_VIDEO_PAYLOAD: usize = MAX_MESSAGE_SIZE - VIDEO_CHUNK_OVERHEAD;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum VideoCodec {
+    Rgb332 = 1,
+    H264 = 2,
+}
+
+impl VideoCodec {
+    pub const fn capability(self) -> u8 {
+        1_u8 << (self as u8 - 1)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -13,12 +28,14 @@ pub enum Message {
         max_width: u16,
         max_height: u16,
         max_fps: u16,
+        codecs: u8,
     },
     SessionConfig {
         session_id: u64,
         width: u16,
         height: u16,
         fps: u16,
+        codec: VideoCodec,
     },
     Start,
     Stop,
@@ -39,6 +56,15 @@ pub enum Message {
         width: u16,
         height: u16,
         pixels: Vec<u8>,
+    },
+    VideoChunk {
+        session_id: u64,
+        frame_number: u64,
+        captured_micros: u64,
+        fragment_index: u16,
+        fragment_count: u16,
+        keyframe: bool,
+        payload: Vec<u8>,
     },
 }
 
@@ -108,23 +134,27 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             max_width,
             max_height,
             max_fps,
+            codecs,
         } => {
             output.push(2);
             put_u16(&mut output, *max_width);
             put_u16(&mut output, *max_height);
             put_u16(&mut output, *max_fps);
+            output.push(*codecs);
         }
         Message::SessionConfig {
             session_id,
             width,
             height,
             fps,
+            codec,
         } => {
             output.push(3);
             put_u64(&mut output, *session_id);
             put_u16(&mut output, *width);
             put_u16(&mut output, *height);
             put_u16(&mut output, *fps);
+            output.push(*codec as u8);
         }
         Message::Start => output.push(4),
         Message::Stop => output.push(5),
@@ -163,6 +193,25 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             put_u16(&mut output, *height);
             output.extend_from_slice(pixels);
         }
+        Message::VideoChunk {
+            session_id,
+            frame_number,
+            captured_micros,
+            fragment_index,
+            fragment_count,
+            keyframe,
+            payload,
+        } => {
+            validate_video_chunk(*fragment_index, *fragment_count, payload.len())?;
+            output.push(10);
+            put_u64(&mut output, *session_id);
+            put_u64(&mut output, *frame_number);
+            put_u64(&mut output, *captured_micros);
+            put_u16(&mut output, *fragment_index);
+            put_u16(&mut output, *fragment_count);
+            output.push(u8::from(*keyframe));
+            output.extend_from_slice(payload);
+        }
     }
     if output.len() > MAX_MESSAGE_SIZE {
         return Err(ProtocolError::Oversized(output.len()));
@@ -185,12 +234,14 @@ fn decode(payload: &[u8]) -> Result<Message, ProtocolError> {
             max_width: take_u16(&mut input)?,
             max_height: take_u16(&mut input)?,
             max_fps: take_u16(&mut input)?,
+            codecs: take_u8(&mut input)?,
         },
         3 => Message::SessionConfig {
             session_id: take_u64(&mut input)?,
             width: take_u16(&mut input)?,
             height: take_u16(&mut input)?,
             fps: take_u16(&mut input)?,
+            codec: take_codec(&mut input)?,
         },
         4 => Message::Start,
         5 => Message::Stop,
@@ -225,6 +276,30 @@ fn decode(payload: &[u8]) -> Result<Message, ProtocolError> {
                 width,
                 height,
                 pixels,
+            }
+        }
+        10 => {
+            let session_id = take_u64(&mut input)?;
+            let frame_number = take_u64(&mut input)?;
+            let captured_micros = take_u64(&mut input)?;
+            let fragment_index = take_u16(&mut input)?;
+            let fragment_count = take_u16(&mut input)?;
+            let keyframe = match take_u8(&mut input)? {
+                0 => false,
+                1 => true,
+                _ => return Err(ProtocolError::Invalid("invalid keyframe flag")),
+            };
+            let mut payload = Vec::new();
+            input.read_to_end(&mut payload)?;
+            validate_video_chunk(fragment_index, fragment_count, payload.len())?;
+            Message::VideoChunk {
+                session_id,
+                frame_number,
+                captured_micros,
+                fragment_index,
+                fragment_count,
+                keyframe,
+                payload,
             }
         }
         _ => return Err(ProtocolError::Invalid("unknown message kind")),
@@ -262,6 +337,14 @@ fn take_u16(input: &mut Cursor<&[u8]>) -> Result<u16, ProtocolError> {
     Ok(u16::from_be_bytes(bytes))
 }
 
+fn take_codec(input: &mut Cursor<&[u8]>) -> Result<VideoCodec, ProtocolError> {
+    match take_u8(input)? {
+        1 => Ok(VideoCodec::Rgb332),
+        2 => Ok(VideoCodec::H264),
+        _ => Err(ProtocolError::Invalid("unknown video codec")),
+    }
+}
+
 fn take_u64(input: &mut Cursor<&[u8]>) -> Result<u64, ProtocolError> {
     let mut bytes = [0; 8];
     input.read_exact(&mut bytes)?;
@@ -273,6 +356,23 @@ fn take_string(input: &mut Cursor<&[u8]>) -> Result<String, ProtocolError> {
     let mut bytes = vec![0; length];
     input.read_exact(&mut bytes)?;
     String::from_utf8(bytes).map_err(|_| ProtocolError::InvalidUtf8)
+}
+
+fn validate_video_chunk(
+    fragment_index: u16,
+    fragment_count: u16,
+    payload_len: usize,
+) -> Result<(), ProtocolError> {
+    if fragment_count == 0 || fragment_index >= fragment_count {
+        return Err(ProtocolError::Invalid("invalid video fragment"));
+    }
+    if payload_len == 0 {
+        return Err(ProtocolError::Invalid("empty video payload"));
+    }
+    if payload_len > MAX_VIDEO_PAYLOAD {
+        return Err(ProtocolError::Oversized(payload_len + VIDEO_CHUNK_OVERHEAD));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,12 +418,14 @@ mod tests {
                 max_width: 1280,
                 max_height: 800,
                 max_fps: 60,
+                codecs: VideoCodec::Rgb332.capability() | VideoCodec::H264.capability(),
             },
             Message::SessionConfig {
                 session_id: 42,
                 width: 32,
                 height: 12,
                 fps: 10,
+                codec: VideoCodec::Rgb332,
             },
             Message::Start,
             Message::Stop,
@@ -340,6 +442,15 @@ mod tests {
                 width: 2,
                 height: 2,
                 pixels: vec![0, 1, 2, 3],
+            },
+            Message::VideoChunk {
+                session_id: 42,
+                frame_number: 4,
+                captured_micros: 10,
+                fragment_index: 1,
+                fragment_count: 2,
+                keyframe: true,
+                payload: vec![0, 0, 0, 1, 0x65],
             },
         ];
         for message in messages {
@@ -362,11 +473,27 @@ mod tests {
             Err(ProtocolError::Oversized(_))
         ));
 
-        let incompatible = [0, 0, 0, 3, 0, 3, 4];
+        let incompatible = [0, 0, 0, 3, 0, 4, 4];
         assert!(matches!(
             read_message(incompatible.as_slice()),
-            Err(ProtocolError::UnsupportedVersion(3))
+            Err(ProtocolError::UnsupportedVersion(4))
         ));
+
+        assert!(
+            write_message(
+                Vec::new(),
+                &Message::VideoChunk {
+                    session_id: 1,
+                    frame_number: 1,
+                    captured_micros: 1,
+                    fragment_index: 1,
+                    fragment_count: 1,
+                    keyframe: false,
+                    payload: vec![1],
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

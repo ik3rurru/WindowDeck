@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
-use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
+use windowdeck_protocol::{
+    ConnectionEvent, ConnectionState, Message, VideoCodec, read_message, write_message,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
@@ -118,6 +120,7 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
             max_width: 1280,
             max_height: 800,
             max_fps: 60,
+            codecs: VideoCodec::Rgb332.capability(),
         },
     )?;
     let (session_id, width, height) = match read_message(&mut stream)? {
@@ -126,7 +129,8 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
             width,
             height,
             fps,
-        } if width > 0 && height > 0 && fps > 0 => {
+            codec,
+        } if width > 0 && height > 0 && fps > 0 && codec == VideoCodec::Rgb332 => {
             emit(
                 Level::Info,
                 "session_configured",
@@ -139,7 +143,9 @@ fn connect(address: &str) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> 
             state = state.apply(ConnectionEvent::Negotiated)?;
             (session_id, width, height)
         }
-        Message::SessionConfig { .. } => return Err("configuración de sesión inválida".into()),
+        Message::SessionConfig { .. } => {
+            return Err("configuración de sesión o códec no compatible".into());
+        }
         _ => return Err("se esperaba SessionConfig".into()),
     };
     match read_message(&mut stream)? {
