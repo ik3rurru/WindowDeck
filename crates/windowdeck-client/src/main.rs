@@ -1,9 +1,10 @@
 use softbuffer::{Context, Surface};
 use std::env;
 use std::error::Error;
-use std::io::Read;
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroU32;
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,7 +40,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let options = parse_options(env::args().skip(1))?;
     if options.h264_test {
-        return receive_h264_test(&options.address);
+        return receive_h264_test(&options.address, options.fullscreen);
     }
     let (stream, session_id, width, height) = connect(&options.address, VideoCodec::Rgb332)?;
     let shutdown = stream.try_clone()?;
@@ -91,9 +92,6 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
             _ if address.is_none() => address = Some(argument),
             _ => return Err("solo se admite una dirección"),
         }
-    }
-    if fullscreen && h264_test {
-        return Err("--fullscreen no se usa con --h264-test");
     }
     Ok(Options {
         address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
@@ -185,24 +183,26 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
     Ok((stream, session_id, width, height))
 }
 
-fn receive_h264_test(address: &str) -> Result<(), Box<dyn Error>> {
+fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Error>> {
     let (mut stream, session_id, ..) = connect(address, VideoCodec::H264)?;
     let (bytes, fragments) = receive_h264_segment(&mut stream, session_id)?;
     emit(
         Level::Info,
         "h264_received",
         &[
-            ("bytes", &bytes.to_string()),
+            ("bytes", &bytes.len().to_string()),
             ("fragments", &fragments.to_string()),
         ],
     );
+    play_h264(&bytes, fullscreen)?;
+    emit(Level::Info, "h264_displayed", &[]);
     Ok(())
 }
 
 fn receive_h264_segment(
     mut reader: impl Read,
     session_id: u64,
-) -> Result<(usize, u16), Box<dyn Error>> {
+) -> Result<(Vec<u8>, u16), Box<dyn Error>> {
     let mut bytes = Vec::new();
     let mut fragment_count = None;
     let mut next_fragment = 0_u16;
@@ -254,7 +254,157 @@ fn receive_h264_segment(
     if bytes.get(4..8) != Some(b"ftyp".as_slice()) {
         return Err("la salida H.264 no contiene un contenedor MP4 válido".into());
     }
-    Ok((bytes.len(), next_fragment))
+    Ok((bytes, next_fragment))
+}
+
+fn play_h264(bytes: &[u8], fullscreen: bool) -> Result<(), Box<dyn Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let stopping = Arc::new(AtomicBool::new(false));
+    let server_stopping = Arc::clone(&stopping);
+    let video = Arc::new(bytes.to_vec());
+    let server = thread::spawn(move || serve_video(listener, video, server_stopping));
+
+    let mut command = Command::new("ffplay");
+    command.args([
+        "-loglevel",
+        "error",
+        "-autoexit",
+        "-an",
+        "-window_title",
+        "WindowDeck H.264",
+    ]);
+    if fullscreen {
+        command.arg("-fs");
+    }
+    let player = command
+        .arg(format!("http://{address}/video.mp4"))
+        .status()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("no se pudo iniciar ffplay; instala FFmpeg: {error}"),
+            )
+        });
+    stopping.store(true, Ordering::Relaxed);
+    let _ = TcpStream::connect(address);
+    server
+        .join()
+        .map_err(|_| "el servidor local de vídeo terminó inesperadamente")??;
+    let player = player?;
+    if !player.success() {
+        return Err(format!("ffplay terminó con {player}").into());
+    }
+    Ok(())
+}
+
+fn serve_video(
+    listener: TcpListener,
+    video: Arc<Vec<u8>>,
+    stopping: Arc<AtomicBool>,
+) -> io::Result<()> {
+    while !stopping.load(Ordering::Relaxed) {
+        let (mut stream, _) = listener.accept()?;
+        if stopping.load(Ordering::Relaxed) {
+            break;
+        }
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        serve_video_request(&mut stream, &video)?;
+    }
+    Ok(())
+}
+
+fn serve_video_request(stream: &mut TcpStream, video: &[u8]) -> io::Result<()> {
+    if video.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "vídeo vacío"));
+    }
+    let mut request = Vec::new();
+    let mut buffer = [0; 1024];
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 || request.len() + read > 8 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "petición HTTP inválida",
+            ));
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+    let request = std::str::from_utf8(&request)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "petición HTTP no UTF-8"))?;
+    let request_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "petición HTTP vacía"))?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or_default();
+    let path = request_parts.next().unwrap_or_default();
+    if !matches!(method, "GET" | "HEAD") || path != "/video.mp4" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "petición HTTP no admitida",
+        ));
+    }
+
+    let range = parse_range(request, video.len())?;
+    let (start, end) = range.unwrap_or((0, video.len() - 1));
+    let length = end - start + 1;
+    if range.is_some() {
+        write!(
+            stream,
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\n",
+            video.len()
+        )?;
+    } else {
+        write!(stream, "HTTP/1.1 200 OK\r\n")?;
+    }
+    write!(
+        stream,
+        "Content-Type: video/mp4\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+    )?;
+    if method == "GET" {
+        stream.write_all(&video[start..=end])?;
+    }
+    Ok(())
+}
+
+fn parse_range(request: &str, length: usize) -> io::Result<Option<(usize, usize)>> {
+    let Some(value) = request.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("range").then_some(value.trim())
+    }) else {
+        return Ok(None);
+    };
+    let value = value
+        .strip_prefix("bytes=")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
+    let (start, end) = value
+        .split_once('-')
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
+    let (start, end) = if start.is_empty() {
+        let suffix = end
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
+        (length.saturating_sub(suffix), length - 1)
+    } else {
+        let start = start
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?;
+        let end = if end.is_empty() {
+            length - 1
+        } else {
+            end.parse::<usize>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rango HTTP inválido"))?
+        };
+        (start, end.min(length - 1))
+    };
+    if start > end || end >= length {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "rango HTTP fuera de límites",
+        ));
+    }
+    Ok(Some((start, end)))
 }
 
 #[derive(Debug)]
@@ -739,7 +889,14 @@ mod tests {
                 h264_test: true,
             })
         );
-        assert!(parse_options(["--h264-test".into(), "--fullscreen".into()]).is_err());
+        assert_eq!(
+            parse_options(["--h264-test".into(), "--fullscreen".into()]),
+            Ok(Options {
+                address: DEFAULT_ADDRESS.into(),
+                fullscreen: true,
+                h264_test: true,
+            })
+        );
         assert!(parse_options(["--unknown".into()]).is_err());
     }
 
@@ -763,9 +920,13 @@ mod tests {
         }
         write_message(&mut stream, &Message::Stop).expect("valid stop");
 
+        let (bytes, fragments) =
+            receive_h264_segment(stream.as_slice(), 42).expect("valid segment");
+        assert_eq!(bytes, b"\0\0\0\x18ftyp");
+        assert_eq!(fragments, 2);
         assert_eq!(
-            receive_h264_segment(stream.as_slice(), 42).expect("valid segment"),
-            (8, 2)
+            parse_range("GET /video.mp4 HTTP/1.1\r\nRange: bytes=4-7\r\n", 8).expect("valid range"),
+            Some((4, 7))
         );
     }
 }
