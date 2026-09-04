@@ -1,7 +1,8 @@
 use super::AnyError;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{MAX_VIDEO_PAYLOAD, Message, write_message};
@@ -201,6 +202,11 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
             "-hide_banner",
             "-loglevel",
             "error",
+            "-nostats",
+            "-stats_period",
+            "1",
+            "-progress",
+            "pipe:2",
             "-nostdin",
             "-f",
             "lavfi",
@@ -238,7 +244,7 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
             "pipe:1",
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
             io::Error::new(
@@ -247,6 +253,8 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
             )
         })?;
     let mut output = ffmpeg.stdout.take().ok_or("ffmpeg no abrió su salida")?;
+    let diagnostics = ffmpeg.stderr.take().ok_or("ffmpeg no abrió sus métricas")?;
+    let diagnostics = thread::spawn(move || log_ffmpeg_progress(diagnostics));
     emit(
         Level::Info,
         "h264_stream_started",
@@ -261,6 +269,9 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
     let result = send_h264_stream(&mut output, stream, session_id);
     let _ = ffmpeg.kill();
     let status = ffmpeg.wait()?;
+    diagnostics
+        .join()
+        .map_err(|_| "el lector de métricas de ffmpeg terminó inesperadamente")??;
     let (bytes, chunks) = result?;
     if !status.success() {
         return Err(format!("ffmpeg terminó con {status}").into());
@@ -290,6 +301,7 @@ fn send_h264_stream(
     let mut buffer = vec![0; MAX_VIDEO_PAYLOAD];
     let mut bytes = 0_u64;
     let mut chunk = 0_u64;
+    let mut last_report = Instant::now();
     loop {
         let read = input.read(&mut buffer)?;
         if read == 0 {
@@ -310,9 +322,66 @@ fn send_h264_stream(
         )?;
         bytes += read as u64;
         chunk += 1;
+        if chunk == 1 {
+            emit(
+                Level::Info,
+                "h264_first_packet_sent",
+                &[("elapsed_ms", &started.elapsed().as_millis().to_string())],
+            );
+        }
+        if last_report.elapsed() >= Duration::from_secs(1) {
+            emit_stream_metrics("h264_send_metrics", started, bytes, chunk);
+            last_report = Instant::now();
+        }
     }
     write_message(&mut stream, &Message::Stop)?;
     Ok((bytes, chunk))
+}
+
+fn emit_stream_metrics(event: &str, started: Instant, bytes: u64, chunks: u64) {
+    let elapsed = started.elapsed();
+    let mbps = bytes as f64 * 8.0 / elapsed.as_secs_f64().max(f64::EPSILON) / 1_000_000.0;
+    emit(
+        Level::Info,
+        event,
+        &[
+            ("elapsed_ms", &elapsed.as_millis().to_string()),
+            ("bytes", &bytes.to_string()),
+            ("chunks", &chunks.to_string()),
+            ("mbps", &format!("{mbps:.2}")),
+        ],
+    );
+}
+
+fn log_ffmpeg_progress(input: impl Read) -> io::Result<[String; 4]> {
+    let mut metrics = ["0", "0", "N/A", "0x"].map(str::to_owned);
+    for line in BufReader::new(input).lines() {
+        let line = line?;
+        let Some((key, value)) = line.split_once('=') else {
+            if !line.is_empty() {
+                emit(Level::Warn, "ffmpeg_output", &[("message", &line)]);
+            }
+            continue;
+        };
+        match key {
+            "frame" => metrics[0] = value.into(),
+            "fps" => metrics[1] = value.into(),
+            "bitrate" => metrics[2] = value.into(),
+            "speed" => metrics[3] = value.into(),
+            "progress" => emit(
+                Level::Info,
+                "h264_encoder_metrics",
+                &[
+                    ("frames", &metrics[0]),
+                    ("fps", &metrics[1]),
+                    ("bitrate", &metrics[2]),
+                    ("speed", &metrics[3]),
+                ],
+            ),
+            _ => {}
+        }
+    }
+    Ok(metrics)
 }
 
 struct StreamFlags {
@@ -503,6 +572,15 @@ mod tests {
         assert_eq!(
             read_message(&mut messages).expect("valid stop"),
             Message::Stop
+        );
+
+        assert_eq!(
+            log_ffmpeg_progress(
+                b"frame=30\nfps=29.9\nbitrate=4000.0kbits/s\nspeed=0.99x\nprogress=continue\n"
+                    .as_slice()
+            )
+            .expect("valid progress"),
+            ["30", "29.9", "4000.0kbits/s", "0.99x"].map(str::to_owned)
         );
     }
 }

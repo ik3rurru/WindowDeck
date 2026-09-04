@@ -71,6 +71,8 @@ cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test
 
 FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por software a 30 FPS y 4 Mbps y envía MPEG-TS mientras la captura sigue activa. El cliente valida el orden de los paquetes y alimenta FFplay directamente, sin guardar la pantalla en disco ni crear una cola en la aplicación. Cierra la ventana para terminar y añade `--fullscreen` si quieres verla a pantalla completa.
 
+Durante la sesión, `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics` muestran FPS, velocidad del encoder, bitrate, bytes y paquetes. `h264_first_packet_*` mide el arranque local de la tubería, no la latencia visual entre dos equipos. La línea base y el procedimiento reproducible están en [docs/testing.md](docs/testing.md).
+
 ## Comprobar
 
 ```bash

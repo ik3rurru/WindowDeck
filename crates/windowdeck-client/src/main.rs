@@ -263,6 +263,8 @@ fn forward_h264(
     session_id: u64,
     stopping: &AtomicBool,
 ) -> io::Result<(u64, u64)> {
+    let started = Instant::now();
+    let mut last_report = Instant::now();
     let mut bytes = 0_u64;
     let mut chunks = 0_u64;
     loop {
@@ -296,6 +298,29 @@ fn forward_h264(
                     .checked_add(payload.len() as u64)
                     .ok_or_else(|| io::Error::other("contador H.264 desbordado"))?;
                 chunks += 1;
+                if chunks == 1 {
+                    emit(
+                        Level::Info,
+                        "h264_first_packet_received",
+                        &[("elapsed_ms", &started.elapsed().as_millis().to_string())],
+                    );
+                }
+                if last_report.elapsed() >= Duration::from_secs(1) {
+                    let elapsed = started.elapsed();
+                    let mbps =
+                        bytes as f64 * 8.0 / elapsed.as_secs_f64().max(f64::EPSILON) / 1_000_000.0;
+                    emit(
+                        Level::Info,
+                        "h264_receive_metrics",
+                        &[
+                            ("elapsed_ms", &elapsed.as_millis().to_string()),
+                            ("bytes", &bytes.to_string()),
+                            ("chunks", &chunks.to_string()),
+                            ("mbps", &format!("{mbps:.2}")),
+                        ],
+                    );
+                    last_report = Instant::now();
+                }
             }
             Message::VideoChunk { .. } => {
                 return Err(io::Error::new(

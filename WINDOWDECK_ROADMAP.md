@@ -434,7 +434,7 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
-Estado actual: host y cliente negocian y reproducen una emisión H.264 continua a 1280 × 800, 30 FPS y 4 Mbps mediante MPEG-TS, el protocolo v3 y FFplay. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación; aún falta medir latencia y sustituir el encoder software por aceleración hardware.
+Estado actual: host y cliente negocian y reproducen una emisión H.264 continua a 1280 × 800, 30 FPS y 4 Mbps mediante MPEG-TS, el protocolo v3 y FFplay. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo y conserva una [línea base local](docs/testing.md). Aún falta medir latencia visual con dos equipos y sustituir el encoder software por aceleración hardware.
 
 Tareas:
 
