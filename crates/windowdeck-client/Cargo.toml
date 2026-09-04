@@ -6,8 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+softbuffer = "0.4.8"
 windowdeck-diagnostics = { path = "../windowdeck-diagnostics" }
 windowdeck-protocol = { path = "../windowdeck-protocol" }
+winit = "0.30.13"
 
 [lints]
 workspace = true

@@ -7,7 +7,7 @@ use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{ConnectionEvent, ConnectionState, Message, read_message, write_message};
 
 const WIDTH: u16 = 32;
-const HEIGHT: u16 = 12;
+const HEIGHT: u16 = 20;
 const FPS: u16 = 10;
 
 fn main() {

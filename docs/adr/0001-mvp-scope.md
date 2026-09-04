@@ -7,7 +7,7 @@
 
 El primer prototipo usará TCP y solo la biblioteca estándar de Rust para validar un handshake versionado y el envío de un patrón sintético de tamaño reducido.
 
-El cliente lo presentará en la terminal. Una ventana, la captura real, H.264, QUIC y el driver IddCx quedan pospuestos hasta que esta conexión mínima sea estable y medible.
+El primer corte presentó el patrón en la terminal. La captura real, H.264, QUIC y el driver IddCx quedan pospuestos hasta que la conexión mínima sea estable y medible. La presentación posterior se describe en el ADR 0002.
 
 ## Consecuencias
 
