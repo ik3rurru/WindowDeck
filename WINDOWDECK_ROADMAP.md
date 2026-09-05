@@ -434,7 +434,7 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
-Estado actual: host y cliente negocian y reproducen una emisión H.264 continua mediante MPEG-TS, el protocolo v3 y FFplay; la prueba actual está configurada a 1280 × 800, 60 FPS y 16 Mbps. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo, conserva [mediciones reales](docs/testing.md) y genera un Flatpak provisional para Steam Deck. La prueba actual reduce también el buffering interno de FFplay; aún falta validar su efecto visual y sustituir el encoder software por aceleración hardware.
+Estado actual: host y cliente negocian y reproducen una emisión H.264 continua mediante MPEG-TS, el protocolo v3 y FFplay; la prueba actual está configurada a 1280 × 800, 60 FPS y 16 Mbps. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo, conserva [mediciones reales](docs/testing.md) y genera un Flatpak provisional para Steam Deck. La prueba actual reduce también el buffering interno de FFplay y permite comparar el perfil anterior con `--ffplay-baseline`. Se ha retirado `-avioflags direct` tras reproducir errores de cabeceras H.264 al arrancar; aún falta validar la latencia visual en la Deck y sustituir el encoder software por aceleración hardware.
 
 Tareas:
 

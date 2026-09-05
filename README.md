@@ -73,6 +73,8 @@ FFmpeg captura el monitor indicado, lo ajusta a 1280 × 800, codifica H.264 por 
 
 Durante la sesión, `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics` muestran FPS, velocidad del encoder, bitrate, bytes y paquetes. `h264_first_packet_*` mide el arranque local de la tubería, no la latencia visual entre dos equipos. La línea base y el procedimiento reproducible están en [docs/testing.md](docs/testing.md).
 
+Para comparar el buffering anterior de FFplay con el actual, añade `--ffplay-baseline` al cliente junto con `--h264-test`. Sin esa opción se usa el buffering reducido. El [procedimiento A/B](docs/testing.md#comparar-el-buffering-de-ffplay) mantiene el mismo host y registra ambos perfiles.
+
 ## Probar el Flatpak en Steam Deck
 
 La acción `Flatpak` de GitHub genera un artefacto `WindowDeck-flatpak` para Steam Deck. Descarga y descomprime el artefacto, copia `WindowDeck.flatpak` a la Deck y, en modo escritorio, ejecuta:

@@ -39,7 +39,11 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let options = parse_options(env::args().skip(1))?;
     if options.h264_test {
-        return receive_h264_test(&options.address, options.fullscreen);
+        return receive_h264_test(
+            &options.address,
+            options.fullscreen,
+            options.ffplay_baseline,
+        );
     }
     let (stream, session_id, width, height) = connect(&options.address, VideoCodec::Rgb332)?;
     let shutdown = stream.try_clone()?;
@@ -77,25 +81,32 @@ struct Options {
     address: String,
     fullscreen: bool,
     h264_test: bool,
+    ffplay_baseline: bool,
 }
 
 fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'static str> {
     let mut address = None;
     let mut fullscreen = false;
     let mut h264_test = false;
+    let mut ffplay_baseline = false;
     for argument in args {
         match argument.as_str() {
             "--fullscreen" => fullscreen = true,
             "--h264-test" => h264_test = true,
+            "--ffplay-baseline" => ffplay_baseline = true,
             _ if argument.starts_with('-') => return Err("opción desconocida"),
             _ if address.is_none() => address = Some(argument),
             _ => return Err("solo se admite una dirección"),
         }
     }
+    if ffplay_baseline && !h264_test {
+        return Err("--ffplay-baseline requiere --h264-test");
+    }
     Ok(Options {
         address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
         fullscreen,
         h264_test,
+        ffplay_baseline,
     })
 }
 
@@ -183,8 +194,7 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
     Ok((stream, session_id, width, height))
 }
 
-fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Error>> {
-    let (stream, session_id, ..) = connect(address, VideoCodec::H264)?;
+fn ffplay_command(fullscreen: bool, baseline: bool) -> Command {
     let mut command = Command::new("ffplay");
     command.args([
         "-loglevel",
@@ -200,23 +210,29 @@ fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Erro
         "32",
         "-analyzeduration",
         "0",
-        "-avioflags",
-        "direct",
-        "-max_delay",
-        "0",
-        "-sync",
-        "ext",
         "-f",
         "mpegts",
         "-window_title",
         "WindowDeck H.264",
     ]);
+    if !baseline {
+        // AVIO direct triggers missing-PPS errors on this MPEG-TS pipe; see docs/testing.md.
+        command.args(["-max_delay", "0", "-sync", "ext"]);
+    }
     if fullscreen {
         command.arg("-fs");
     }
-    let mut player = command
-        .args(["-i", "pipe:0"])
-        .stdin(Stdio::piped())
+    command.args(["-i", "pipe:0"]).stdin(Stdio::piped());
+    command
+}
+
+fn receive_h264_test(
+    address: &str,
+    fullscreen: bool,
+    baseline: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (stream, session_id, ..) = connect(address, VideoCodec::H264)?;
+    let mut player = ffplay_command(fullscreen, baseline)
         .spawn()
         .map_err(|error| {
             io::Error::new(
@@ -224,6 +240,11 @@ fn receive_h264_test(address: &str, fullscreen: bool) -> Result<(), Box<dyn Erro
                 format!("no se pudo iniciar ffplay; instala FFmpeg: {error}"),
             )
         })?;
+    emit(
+        Level::Info,
+        "h264_player_started",
+        &[("buffering", if baseline { "baseline" } else { "reduced" })],
+    );
     let input = player.stdin.take().ok_or("ffplay no abrió su entrada")?;
     let shutdown = stream.try_clone()?;
     let stopping = Arc::new(AtomicBool::new(false));
@@ -814,6 +835,7 @@ mod tests {
                 address: "192.0.2.1:48150".into(),
                 fullscreen: true,
                 h264_test: false,
+                ffplay_baseline: false,
             })
         );
         assert_eq!(
@@ -822,6 +844,7 @@ mod tests {
                 address: DEFAULT_ADDRESS.into(),
                 fullscreen: false,
                 h264_test: false,
+                ffplay_baseline: false,
             })
         );
         assert_eq!(
@@ -830,6 +853,7 @@ mod tests {
                 address: DEFAULT_ADDRESS.into(),
                 fullscreen: false,
                 h264_test: true,
+                ffplay_baseline: false,
             })
         );
         assert_eq!(
@@ -838,9 +862,59 @@ mod tests {
                 address: DEFAULT_ADDRESS.into(),
                 fullscreen: true,
                 h264_test: true,
+                ffplay_baseline: false,
             })
         );
         assert!(parse_options(["--unknown".into()]).is_err());
+        assert!(parse_options(["--ffplay-baseline".into()]).is_err());
+        let baseline = parse_options([
+            "--ffplay-baseline".into(),
+            "--fullscreen".into(),
+            "--h264-test".into(),
+        ])
+        .expect("valid H.264 comparison");
+        assert!(baseline.ffplay_baseline && baseline.h264_test && baseline.fullscreen);
+    }
+
+    #[test]
+    fn ffplay_comparison_only_changes_buffering_options() {
+        let baseline = ffplay_command(true, true);
+        let baseline_args: Vec<_> = baseline.get_args().collect();
+        assert_eq!(
+            baseline_args,
+            [
+                "-loglevel",
+                "error",
+                "-autoexit",
+                "-an",
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-framedrop",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-f",
+                "mpegts",
+                "-window_title",
+                "WindowDeck H.264",
+                "-fs",
+                "-i",
+                "pipe:0",
+            ]
+        );
+        let reduced = ffplay_command(true, false);
+        let reduced_args: Vec<_> = reduced.get_args().collect();
+        assert_eq!(&reduced_args[..17], &baseline_args[..17]);
+        assert_eq!(&reduced_args[17..21], ["-max_delay", "0", "-sync", "ext"]);
+        assert_eq!(&reduced_args[21..], &baseline_args[17..]);
+        assert!(
+            !ffplay_command(false, false)
+                .get_args()
+                .any(|arg| arg == "-fs")
+        );
     }
 
     #[test]
