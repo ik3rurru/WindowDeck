@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <KitVersion>10.0.28000.2526</KitVersion>
+    <KitPackages>$(MSBuildThisFileDirectory)..\..\target\idd-tools\packages\</KitPackages>
+  </PropertyGroup>
+  <Import Project="$(KitPackages)Microsoft.Windows.WDK.x64.$(KitVersion)\build\native\Microsoft.Windows.WDK.x64.props" />
+  <Import Project="$(KitPackages)Microsoft.Windows.SDK.CPP.x64.$(KitVersion)\build\native\Microsoft.Windows.SDK.cpp.x64.props" />
+  <Import Project="$(KitPackages)Microsoft.Windows.SDK.CPP.$(KitVersion)\build\native\Microsoft.Windows.SDK.cpp.props" />
+</Project>

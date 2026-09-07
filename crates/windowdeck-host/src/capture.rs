@@ -1,7 +1,11 @@
 use super::AnyError;
+#[path = "driver_frames.rs"]
+mod driver_frames;
 use std::io::{self, BufRead, BufReader, Read};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
@@ -24,6 +28,10 @@ use windows_capture::settings::{
 pub(super) const ENCODE_FPS: u32 = 60;
 const ENCODE_BITRATE: u32 = 16_000_000;
 const ENCODE_FRAMES: u64 = 60;
+
+pub(super) fn probe_driver_frames() -> Result<(), AnyError> {
+    driver_frames::run(display_tool()?)
+}
 
 struct CaptureProbe;
 
@@ -190,6 +198,194 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
         "ddagrab=output_idx={}:framerate={ENCODE_FPS}:draw_mouse=1",
         index - 1
     );
+    stream_h264_input(stream, session_id, input, index.to_string(), None)
+}
+
+fn display_tool() -> Result<PathBuf, AnyError> {
+    if let Some(path) = std::env::var_os("WINDOWDECK_DISPLAY_EXE") {
+        return Ok(path.into());
+    }
+    let exe = std::env::current_exe()?;
+    let directory = exe.parent().ok_or("no se encuentra la carpeta del host")?;
+    for path in [
+        directory.join("windowdeck-display.exe"),
+        directory.join("../windows-idd/windowdeck-display.exe"),
+    ] {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err("falta windowdeck-display.exe; compila driver/windows-idd/build.ps1 o configura WINDOWDECK_DISPLAY_EXE".into())
+}
+
+pub(super) struct DisplayLease {
+    child: std::process::Child,
+}
+
+impl DisplayLease {
+    pub(super) fn acquire() -> Result<Self, AnyError> {
+        Self::start(Command::new(display_tool()?).arg("--lease"))
+    }
+
+    fn start(command: &mut Command) -> Result<Self, AnyError> {
+        let mut lease = Self {
+            child: command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?,
+        };
+        let output = lease
+            .child
+            .stdout
+            .take()
+            .ok_or("falta la salida de --lease")?;
+        let (ready, response) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(output).read_line(&mut line).map(|_| line);
+            let _ = ready.send(result);
+        });
+        let result = response.recv_timeout(Duration::from_secs(9));
+        if !matches!(&result, Ok(Ok(line)) if line.trim() == "READY") {
+            let _ = lease.child.kill();
+            let _ = lease.child.wait();
+            let _ = reader.join();
+            return Err("no se pudo activar el monitor automático; inicia windowdeck-display --broker como administrador y consulta su registro".into());
+        }
+        reader.join().map_err(|_| "falló el lector de --lease")?;
+        emit(Level::Info, "virtual_display_acquired", &[]);
+        Ok(lease)
+    }
+}
+
+impl Drop for DisplayLease {
+    fn drop(&mut self) {
+        // EOF also occurs when the host exits unexpectedly. The native helper releases
+        // the broker connection and waits for PnP removal before exiting.
+        drop(self.child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(7);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    break;
+                }
+            }
+        }
+        emit(Level::Info, "virtual_display_released", &[]);
+    }
+}
+
+fn virtual_device_name() -> Result<String, AnyError> {
+    let output = Command::new(display_tool()?).arg("--source").output()?;
+    if !output.status.success() {
+        return Err(format!("monitor WindowDeck no disponible: {}; abre windowdeck-display --run como administrador",
+            String::from_utf8_lossy(&output.stderr).trim()).into());
+    }
+    parse_device_name(&output.stdout)
+}
+
+fn parse_device_name(bytes: &[u8]) -> Result<String, AnyError> {
+    let name = std::str::from_utf8(bytes)?.trim();
+    let suffix = name
+        .strip_prefix(r"\\.\DISPLAY")
+        .ok_or("respuesta --source inválida; recompila la utilidad WindowDeck")?;
+    if suffix.is_empty()
+        || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+        || suffix.parse::<u32>()? == 0
+    {
+        return Err("nombre de dispositivo WindowDeck inválido".into());
+    }
+    Ok(name.to_owned())
+}
+
+pub fn virtual_monitor() -> Result<Monitor, AnyError> {
+    // Resolve the driver's device path through DisplayConfig, never an assumed monitor index or friendly name.
+    let name = virtual_device_name()?;
+    for monitor in Monitor::enumerate()? {
+        if monitor.device_name()? == name {
+            if monitor.width()? != u32::from(super::H264_WIDTH)
+                || monitor.height()? != u32::from(super::H264_HEIGHT)
+            {
+                return Err("el modo de WindowDeck cambió durante la consulta".into());
+            }
+            return Ok(monitor);
+        }
+    }
+    Err("el monitor WindowDeck desapareció durante la consulta".into())
+}
+
+pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+    let monitor = virtual_monitor()?;
+    let name = monitor.device_name()?;
+    let handle = monitor.as_raw_hmonitor() as usize;
+    let input = format!(
+        "gfxcapture=hmonitor={handle}:max_framerate={ENCODE_FPS}:capture_cursor=1:output_fmt=bgra"
+    );
+    emit(
+        Level::Info,
+        "virtual_capture_selected",
+        &[
+            ("device", &name),
+            ("name", &monitor.name()?),
+            ("capture", "windows_graphics_capture"),
+        ],
+    );
+    stream_h264_input(stream, session_id, input, name.clone(), Some(name))
+}
+
+// Own the encoder so all error paths reap it. The virtual route also watches removal,
+// client closure and stalled output; a capture must never fall back to the physical screen.
+struct EncoderProcess {
+    child: Arc<Mutex<std::process::Child>>,
+    cancel: mpsc::Sender<()>,
+    watcher: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for EncoderProcess {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
+    }
+}
+
+struct EncoderOutput {
+    pipe: std::process::ChildStdout,
+    last_output: Arc<Mutex<Instant>>,
+}
+
+impl Read for EncoderOutput {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.pipe.read(buffer)?;
+        if count != 0 {
+            *self
+                .last_output
+                .lock()
+                .map_err(|_| io::Error::other("encoder progress lock poisoned"))? = Instant::now();
+        }
+        Ok(count)
+    }
+}
+
+fn stream_h264_input(
+    stream: TcpStream,
+    session_id: u64,
+    input: String,
+    monitor: String,
+    virtual_device: Option<String>,
+) -> Result<(), AnyError> {
+    let peer = stream.try_clone()?;
+    // Only the watchdog reads after negotiation; the existing write timeout is preserved.
+    peer.set_read_timeout(Some(Duration::from_millis(200)))?;
     let filter = format!(
         "hwdownload,format=bgra,scale={}:{}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
         super::H264_WIDTH,
@@ -197,6 +393,11 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
         super::H264_WIDTH,
         super::H264_HEIGHT,
     );
+    let filter = if virtual_device.is_some() {
+        format!("{filter},fps={ENCODE_FPS}")
+    } else {
+        filter
+    };
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -252,14 +453,69 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
                 format!("no se pudo iniciar ffmpeg; instala FFmpeg: {error}"),
             )
         })?;
-    let mut output = ffmpeg.stdout.take().ok_or("ffmpeg no abrió su salida")?;
+    let last_output = Arc::new(Mutex::new(Instant::now()));
+    let mut output = EncoderOutput {
+        pipe: ffmpeg.stdout.take().ok_or("ffmpeg no abrió su salida")?,
+        last_output: Arc::clone(&last_output),
+    };
     let diagnostics = ffmpeg.stderr.take().ok_or("ffmpeg no abrió sus métricas")?;
+    let (cancel, cancelled) = mpsc::channel();
+    let child = Arc::new(Mutex::new(ffmpeg));
+    let mut encoder = EncoderProcess {
+        child: Arc::clone(&child),
+        cancel,
+        watcher: None,
+    };
+    if let Some(expected) = virtual_device {
+        encoder.watcher = Some(thread::spawn(move || {
+            while matches!(
+                cancelled.recv_timeout(Duration::from_millis(500)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                let mut byte = [0];
+                let disconnected = match peer.peek(&mut byte) {
+                    Ok(0) => true,
+                    Ok(_) => false,
+                    Err(error) => !matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
+                    ),
+                };
+                let active = virtual_device_name().is_ok_and(|name| name == expected);
+                let stalled = last_output
+                    .lock()
+                    .map_or(true, |last| last.elapsed() > Duration::from_secs(10));
+                if disconnected || !active || stalled {
+                    emit(
+                        Level::Info,
+                        "virtual_capture_stopped",
+                        &[(
+                            "reason",
+                            if disconnected {
+                                "client_disconnected"
+                            } else if !active {
+                                "monitor_removed_or_changed"
+                            } else {
+                                "encoder_stalled"
+                            },
+                        )],
+                    );
+                    if let Ok(mut child) = child.lock() {
+                        let _ = child.kill();
+                    }
+                    break;
+                }
+            }
+        }));
+    }
     let diagnostics = thread::spawn(move || log_ffmpeg_progress(diagnostics));
     emit(
         Level::Info,
         "h264_stream_started",
         &[
-            ("monitor", &index.to_string()),
+            ("monitor", &monitor),
             ("width", &super::H264_WIDTH.to_string()),
             ("height", &super::H264_HEIGHT.to_string()),
             ("fps", &ENCODE_FPS.to_string()),
@@ -267,8 +523,14 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
     );
 
     let result = send_h264_stream(&mut output, stream, session_id);
-    let _ = ffmpeg.kill();
-    let status = ffmpeg.wait()?;
+    let status = {
+        let mut child = encoder
+            .child
+            .lock()
+            .map_err(|_| "encoder process lock poisoned")?;
+        let _ = child.kill();
+        child.wait()?
+    };
     diagnostics
         .join()
         .map_err(|_| "el lector de métricas de ffmpeg terminó inesperadamente")??;
@@ -527,6 +789,26 @@ fn downscale_bgra(
 mod tests {
     use super::*;
     use windowdeck_protocol::read_message;
+
+    #[test]
+    fn virtual_source_rejects_unexpected_helper_output() {
+        assert_eq!(
+            parse_device_name(b"\\\\.\\DISPLAY12\r\n").expect("GDI source"),
+            r"\\.\DISPLAY12"
+        );
+        for invalid in [
+            "",
+            "WindowDeck",
+            r"\\.\DISPLAY",
+            r"\\.\DISPLAY0",
+            r"\\.\DISPLAY-1",
+            r"\\.\DISPLAY1:monitor_idx=0",
+            "\\\\.\\DISPLAY1\n\\\\.\\DISPLAY2",
+        ] {
+            assert!(parse_device_name(invalid.as_bytes()).is_err(), "{invalid}");
+        }
+        assert!(parse_device_name(&[255]).is_err());
+    }
 
     #[test]
     fn bgra_is_downscaled_to_rgb332() {

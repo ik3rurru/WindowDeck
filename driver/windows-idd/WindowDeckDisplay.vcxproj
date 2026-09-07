@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{46AB7539-5769-49CD-B448-6C2488703CC9}</ProjectGuid>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <_NT_TARGET_VERSION>0xA00000B</_NT_TARGET_VERSION>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
+    <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
+    <IndirectDisplayDriver>true</IndirectDisplayDriver>
+    <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
+    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <Driver_SpectreMitigation>Spectre</Driver_SpectreMitigation>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\target\windows-idd\</OutDir>
+    <IntDir>$(OutDir)obj\driver\</IntDir>
+    <SignMode>Off</SignMode>
+    <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
+    <RunCodeAnalysis>true</RunCodeAnalysis>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <PreprocessorDefinitions>UMDF_DRIVER;_WIN64;_AMD64_;AMD64;IDDCX_VERSION_MAJOR=$(IDDCX_VERSION_MAJOR);IDDCX_VERSION_MINOR=$(IDDCX_VERSION_MINOR);IDDCX_MINIMUM_VERSION_REQUIRED=$(IDDCX_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;gdi32.lib</AdditionalDependencies></Link>
+    <Inf><DateStamp>09/07/2026</DateStamp><TimeStamp>0.1.0.8</TimeStamp></Inf>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="Driver.cpp" />
+    <ClInclude Include="DisplayMode.h" />
+    <ClInclude Include="FrameExchange.h" />
+    <ClInclude Include="FramePublisher.h" />
+    <Inf Include="WindowDeckDisplay.inf" />
+    <ResourceCompile Include="WindowDeckDisplay.rc" />
+    <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

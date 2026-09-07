@@ -2,7 +2,9 @@
 
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 60 FPS, pero todavía no usa aceleración hardware ni crea un monitor virtual. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 60 FPS, pero todavía no usa codificación por hardware. El [prototipo de monitor virtual](driver/windows-idd/README.md) activa un escritorio extendido de 1280 × 800 a 60 Hz y supera diez ciclos de activación/retirada. La nueva ruta `--virtual-h264` captura ese escritorio mediante Windows Graphics Capture y ya permite usar la Deck como pantalla extendida, confirmado visualmente por el usuario. La latencia es perceptible y todavía no está medida. La opción `--auto-virtual-h264` vincula la activación y retirada del monitor a la sesión, con un controlador local iniciado previamente como administrador. El HDMI del dock de Steam Deck es una salida, no una entrada.
+
+Para retomar el desarrollo, consultar el [punto de continuación de la última sesión](docs/continuation.md).
 
 ## Requisitos
 
@@ -75,6 +77,56 @@ Durante la sesión, `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_
 
 Para comparar el buffering anterior de FFplay con el actual, añade `--ffplay-baseline` al cliente junto con `--h264-test`. Sin esa opción se usa el buffering reducido. El [procedimiento A/B](docs/testing.md#comparar-el-buffering-de-ffplay) mantiene el mismo host y registra ambos perfiles.
 
+## Enviar el monitor virtual a la Deck
+
+Para activar y retirar el monitor automáticamente con cada sesión, recompila la utilidad y el host. Con el driver de prueba ya instalado, abre una terminal de Windows **como administrador** y ejecuta una vez:
+
+```powershell
+.\target\windows-idd\windowdeck-display.exe --broker
+```
+
+En otra terminal normal, con FFmpeg en `PATH`:
+
+```powershell
+cargo run -p windowdeck-host -- --auto-virtual-h264 0.0.0.0:48150
+```
+
+Abre el cliente H.264 en la Deck como antes. Una conexión compatible activa la pantalla; cerrar el cliente detiene el encoder y retira el monitor. El host y el controlador quedan esperando otra sesión. Cierra el controlador con Ctrl+C cuando termines de usar WindowDeck. No hace falta pulsar X por cada conexión. El controlador debe pertenecer al mismo inicio de sesión de Windows que el host; todavía se inicia manualmente, sin servicio instalado. Véase la [decisión de ciclo de vida](docs/adr/0010-automatic-display-lifetime.md).
+
+Para usar la activación manual de diagnóstico:
+
+Con el [driver de prueba instalado](driver/windows-idd/README.md), recompila la utilidad con `driver/windows-idd/build.ps1`. En una terminal de Windows **como administrador**, activa el monitor y mantenla abierta:
+
+```powershell
+.\target\windows-idd\windowdeck-display.exe --run
+```
+
+En otra terminal normal, con FFmpeg disponible en `PATH`:
+
+```powershell
+cargo run -p windowdeck-host -- --virtual-h264 0.0.0.0:48150
+```
+
+Usa el mismo cliente H.264 de la Deck y la IP actual del PC. El host selecciona WindowDeck automáticamente; no hay que indicar un número de monitor. Se requiere FFmpeg con el filtro `gfxcapture`, comprobado en 9.0.1. Si ejecutas el host fuera de `target/debug` o `target/release`, coloca `windowdeck-display.exe` a su lado o configura `WINDOWDECK_DISPLAY_EXE` con su ruta.
+
+Mueve una ventana al escritorio extendido para verla en la Deck. En este modo manual, cerrar el cliente detiene el vídeo; pulsa **X** en la utilidad de Windows para retirar el monitor. La [integración provisional](docs/adr/0009-virtual-desktop-capture.md) recaptura el escritorio: el intercambio directo de superficies con el driver sigue pendiente.
+
+## Prototipo de frames directos del driver
+
+Con el paquete de prueba **0.1.0.8** instalado y sin una sesión de vídeo activa, abre una vez como administrador:
+
+```powershell
+.\target\windows-idd\windowdeck-display.exe --frame-broker
+```
+
+Desde una terminal normal:
+
+```powershell
+cargo run -p windowdeck-host -- --driver-frame-test
+```
+
+La prueba activa el monitor virtual, muestra allí un patrón conocido, recibe 120 frames BGRA del driver mediante memoria compartida y comprueba muestras de sus píxeles en Rust. Retira la pantalla al terminar y no guarda imágenes. Es una referencia con copias CPU; el vídeo de la Deck sigue usando WGC. Resultados y límites en [ADR 0011](docs/adr/0011-driver-frame-transfer-probe.md).
+
 ## Probar el Flatpak en Steam Deck
 
 La acción `Flatpak` de GitHub genera un artefacto `WindowDeck-flatpak` para Steam Deck. Descarga y descomprime el artefacto, copia `WindowDeck.flatpak` a la Deck y, en modo escritorio, ejecuta:
@@ -103,3 +155,5 @@ Consulta [la hoja de ruta](WINDOWDECK_ROADMAP.md) para conocer el alcance y los 
 ## Licencia
 
 Disponible bajo licencia MIT o Apache 2.0, a elección del usuario.
+
+Excepción: la adaptación del ejemplo Microsoft en [driver/windows-idd](driver/windows-idd/README.md) se distribuye bajo [MS-PL](driver/windows-idd/LICENSE).

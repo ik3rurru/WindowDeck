@@ -53,6 +53,7 @@ fn run() -> Result<(), AnyError> {
         } => run_server(address, monitor, codec),
         Mode::CaptureTest(index) => capture_test(index),
         Mode::EncodeTest(index) => encode_test(index),
+        Mode::DriverFrameTest => driver_frame_test(),
     }
 }
 
@@ -60,16 +61,45 @@ fn run() -> Result<(), AnyError> {
 enum Mode {
     Serve {
         address: String,
-        monitor: Option<usize>,
+        monitor: Option<CaptureTarget>,
         codec: VideoCodec,
     },
     CaptureTest(usize),
     EncodeTest(usize),
+    DriverFrameTest,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureTarget {
+    Monitor(usize),
+    WindowDeck,
+    WindowDeckAuto,
 }
 
 fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
     let mut args = args.into_iter();
     match args.next().as_deref() {
+        Some("--driver-frame-test") => {
+            if args.next().is_some() {
+                return Err("usa --driver-frame-test sin argumentos");
+            }
+            Ok(Mode::DriverFrameTest)
+        }
+        Some(command @ ("--virtual-h264" | "--auto-virtual-h264")) => {
+            let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
+            if args.next().is_some() || address.starts_with('-') {
+                return Err("usa --virtual-h264 [DIRECCIÓN] o --auto-virtual-h264 [DIRECCIÓN]");
+            }
+            Ok(Mode::Serve {
+                address,
+                monitor: Some(if command == "--auto-virtual-h264" {
+                    CaptureTarget::WindowDeckAuto
+                } else {
+                    CaptureTarget::WindowDeck
+                }),
+                codec: VideoCodec::H264,
+            })
+        }
         Some(command @ ("--capture-test" | "--encode-test")) => {
             let index = args
                 .next()
@@ -97,7 +127,7 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
             }
             Ok(Mode::Serve {
                 address,
-                monitor: Some(index),
+                monitor: Some(CaptureTarget::Monitor(index)),
                 codec: if command == "--h264" {
                     VideoCodec::H264
                 } else {
@@ -120,6 +150,16 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
 }
 
 #[cfg(windows)]
+fn driver_frame_test() -> Result<(), AnyError> {
+    capture::probe_driver_frames()
+}
+
+#[cfg(not(windows))]
+fn driver_frame_test() -> Result<(), AnyError> {
+    Err("el prototipo del driver requiere Windows".into())
+}
+
+#[cfg(windows)]
 fn capture_test(index: usize) -> Result<(), AnyError> {
     capture::run(index)
 }
@@ -139,7 +179,11 @@ fn encode_test(_index: usize) -> Result<(), AnyError> {
     Err("la codificación de pantalla solo está disponible en Windows".into())
 }
 
-fn run_server(address: String, monitor: Option<usize>, codec: VideoCodec) -> Result<(), AnyError> {
+fn run_server(
+    address: String,
+    monitor: Option<CaptureTarget>,
+    codec: VideoCodec,
+) -> Result<(), AnyError> {
     #[cfg(not(windows))]
     if monitor.is_some() {
         return Err("la captura de pantalla solo está disponible en Windows".into());
@@ -164,7 +208,11 @@ fn run_server(address: String, monitor: Option<usize>, codec: VideoCodec) -> Res
     }
 }
 
-fn serve(mut stream: TcpStream, monitor: Option<usize>, codec: VideoCodec) -> Result<(), AnyError> {
+fn serve(
+    mut stream: TcpStream,
+    monitor: Option<CaptureTarget>,
+    codec: VideoCodec,
+) -> Result<(), AnyError> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -204,6 +252,14 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>, codec: VideoCodec) -> Re
         _ => return Err("se esperaba Capabilities".into()),
     }
 
+    // Negotiate first: incomplete or incompatible clients must never create a display.
+    // The lease outlives capture_stream, so its encoder is reaped before monitor removal.
+    #[cfg(windows)]
+    let _display_lease = if monitor == Some(CaptureTarget::WindowDeckAuto) {
+        Some(capture::DisplayLease::acquire()?)
+    } else {
+        None
+    };
     let session_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
     write_message(
         &mut stream,
@@ -261,10 +317,19 @@ fn serve(mut stream: TcpStream, monitor: Option<usize>, codec: VideoCodec) -> Re
 #[cfg(windows)]
 fn capture_stream(
     stream: TcpStream,
-    index: usize,
+    target: CaptureTarget,
     session_id: u64,
     codec: VideoCodec,
 ) -> Result<(), AnyError> {
+    let index = match target {
+        CaptureTarget::WindowDeck | CaptureTarget::WindowDeckAuto if codec == VideoCodec::H264 => {
+            return capture::stream_virtual_h264(stream, session_id);
+        }
+        CaptureTarget::WindowDeck | CaptureTarget::WindowDeckAuto => {
+            return Err("WindowDeck requiere H.264".into());
+        }
+        CaptureTarget::Monitor(index) => index,
+    };
     match codec {
         VideoCodec::Rgb332 => capture::stream(stream, index, session_id),
         VideoCodec::H264 => capture::stream_h264(stream, index, session_id),
@@ -274,14 +339,17 @@ fn capture_stream(
 #[cfg(not(windows))]
 fn capture_stream(
     _stream: TcpStream,
-    _index: usize,
+    _target: CaptureTarget,
     _session_id: u64,
     _codec: VideoCodec,
 ) -> Result<(), AnyError> {
     Err("la captura de pantalla solo está disponible en Windows".into())
 }
 
-fn stream_format(codec: VideoCodec, monitor: Option<usize>) -> Result<(u16, u16, u16), AnyError> {
+fn stream_format(
+    codec: VideoCodec,
+    monitor: Option<CaptureTarget>,
+) -> Result<(u16, u16, u16), AnyError> {
     match codec {
         VideoCodec::Rgb332 => Ok((WIDTH, HEIGHT, FPS)),
         VideoCodec::H264 => h264_format(monitor.ok_or("H.264 requiere un monitor")?),
@@ -289,13 +357,21 @@ fn stream_format(codec: VideoCodec, monitor: Option<usize>) -> Result<(u16, u16,
 }
 
 #[cfg(windows)]
-fn h264_format(index: usize) -> Result<(u16, u16, u16), AnyError> {
-    capture::size(index)?;
+fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
+    match target {
+        CaptureTarget::Monitor(index) => {
+            capture::size(index)?;
+        }
+        CaptureTarget::WindowDeck => {
+            capture::virtual_monitor()?;
+        }
+        CaptureTarget::WindowDeckAuto => {}
+    }
     Ok((H264_WIDTH, H264_HEIGHT, capture::ENCODE_FPS as u16))
 }
 
 #[cfg(not(windows))]
-fn h264_format(_index: usize) -> Result<(u16, u16, u16), AnyError> {
+fn h264_format(_target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
     Err("la codificación H.264 solo está disponible en Windows".into())
 }
 
@@ -369,7 +445,7 @@ mod tests {
             parse_mode(["--capture".into(), "2".into(), "127.0.0.1:9".into()]),
             Ok(Mode::Serve {
                 address: "127.0.0.1:9".into(),
-                monitor: Some(2),
+                monitor: Some(CaptureTarget::Monitor(2)),
                 codec: VideoCodec::Rgb332,
             })
         );
@@ -377,11 +453,89 @@ mod tests {
             parse_mode(["--h264".into(), "1".into()]),
             Ok(Mode::Serve {
                 address: DEFAULT_ADDRESS.into(),
-                monitor: Some(1),
+                monitor: Some(CaptureTarget::Monitor(1)),
                 codec: VideoCodec::H264,
             })
         );
         assert!(parse_mode(["--capture-test".into(), "0".into()]).is_err());
         assert!(parse_mode(["--unknown".into()]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn automatic_display_requires_compatible_negotiation() {
+        for codecs in [0, VideoCodec::Rgb332.capability()] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                serve(
+                    socket,
+                    Some(CaptureTarget::WindowDeckAuto),
+                    VideoCodec::H264,
+                )
+                .unwrap_err()
+                .to_string()
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            write_message(
+                &mut client,
+                &Message::Hello {
+                    app_version: "test".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message(&mut client).unwrap(),
+                Message::Hello { .. }
+            ));
+            write_message(
+                &mut client,
+                &Message::Capabilities {
+                    max_width: 1280,
+                    max_height: 800,
+                    max_fps: 60,
+                    codecs,
+                },
+            )
+            .unwrap();
+            let error = server.join().unwrap();
+            assert_eq!(error, "el cliente no admite la configuración solicitada");
+        }
+    }
+
+    #[test]
+    fn virtual_mode_is_explicit_and_rejects_extra_arguments() {
+        assert_eq!(
+            parse_mode(["--auto-virtual-h264".into()]),
+            Ok(Mode::Serve {
+                address: DEFAULT_ADDRESS.into(),
+                monitor: Some(CaptureTarget::WindowDeckAuto),
+                codec: VideoCodec::H264,
+            })
+        );
+        assert!(parse_mode(["--auto-virtual-h264".into(), "--unknown".into()]).is_err());
+        for address in [DEFAULT_ADDRESS, "127.0.0.1:48151"] {
+            assert_eq!(
+                parse_mode(["--virtual-h264".into(), address.into()]),
+                Ok(Mode::Serve {
+                    address: address.into(),
+                    monitor: Some(CaptureTarget::WindowDeck),
+                    codec: VideoCodec::H264,
+                })
+            );
+        }
+        assert!(parse_mode(["--virtual-h264".into(), "--h264".into()]).is_err());
+        assert!(
+            parse_mode([
+                "--virtual-h264".into(),
+                "127.0.0.1:48151".into(),
+                "2".into()
+            ])
+            .is_err()
+        );
     }
 }
