@@ -29,8 +29,8 @@ pub(super) const ENCODE_FPS: u32 = 60;
 const ENCODE_BITRATE: u32 = 16_000_000;
 const ENCODE_FRAMES: u64 = 60;
 
-pub(super) fn probe_driver_frames() -> Result<(), AnyError> {
-    driver_frames::run(display_tool()?)
+pub(super) fn probe_driver_frames(gpu: bool) -> Result<(), AnyError> {
+    driver_frames::run(display_tool()?, gpu)
 }
 
 struct CaptureProbe;
@@ -198,7 +198,7 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
         "ddagrab=output_idx={}:framerate={ENCODE_FPS}:draw_mouse=1",
         index - 1
     );
-    stream_h264_input(stream, session_id, input, index.to_string(), None)
+    stream_h264_input(stream, session_id, input, index.to_string(), None, None)
 }
 
 fn display_tool() -> Result<PathBuf, AnyError> {
@@ -334,7 +334,59 @@ pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), Any
             ("capture", "windows_graphics_capture"),
         ],
     );
-    stream_h264_input(stream, session_id, input, name.clone(), Some(name))
+    stream_h264_input(stream, session_id, input, name.clone(), Some(name), None)
+}
+
+struct CpuFrameSource(std::process::Child);
+
+impl Drop for CpuFrameSource {
+    fn drop(&mut self) {
+        // Closing this private pipe also handles unexpected host termination.
+        drop(self.0.stdin.take());
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+pub fn stream_driver_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+    let mut source = CpuFrameSource(
+        Command::new(display_tool()?)
+            .arg("--cpu-frame-stream")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?,
+    );
+    let deadline = Instant::now() + Duration::from_secs(9);
+    let name = loop {
+        if let Some(status) = source.0.try_wait()? {
+            return Err(format!(
+                "el auxiliar CPU terminó con {status}; inicia --frame-broker como administrador"
+            )
+            .into());
+        }
+        if let Ok(name) = virtual_device_name() {
+            break name;
+        }
+        if Instant::now() >= deadline {
+            return Err("el monitor CPU no se activó a tiempo".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    let input = source.0.stdout.take().ok_or("falta la salida CPU")?;
+    emit(
+        Level::Info,
+        "driver_capture_selected",
+        &[("capture", "driver_cpu"), ("device", &name)],
+    );
+    // Source outlives the encoder: drop FFmpeg before releasing the virtual display.
+    stream_h264_input(
+        stream,
+        session_id,
+        String::new(),
+        name.clone(),
+        Some(name),
+        Some(input),
+    )
 }
 
 // Own the encoder so all error paths reap it. The virtual route also watches removal,
@@ -382,7 +434,19 @@ fn stream_h264_input(
     input: String,
     monitor: String,
     virtual_device: Option<String>,
+    raw_input: Option<std::process::ChildStdout>,
 ) -> Result<(), AnyError> {
+    let encoder_name =
+        std::env::var("WINDOWDECK_H264_ENCODER").unwrap_or_else(|_| "libx264".into());
+    let encoder_name = match encoder_name.as_str() {
+        "libx264" | "h264_amf" | "h264_nvenc" | "h264_mf" => encoder_name,
+        _ => {
+            return Err(
+                "WINDOWDECK_H264_ENCODER inválido; usa libx264, h264_amf, h264_nvenc o h264_mf"
+                    .into(),
+            );
+        }
+    };
     let peer = stream.try_clone()?;
     // Only the watchdog reads after negotiation; the existing write timeout is preserved.
     peer.set_read_timeout(Some(Duration::from_millis(200)))?;
@@ -398,32 +462,57 @@ fn stream_h264_input(
     } else {
         filter
     };
-    let mut ffmpeg = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
+        "-stats_period",
+        "1",
+        "-progress",
+        "pipe:2",
+        "-nostdin",
+    ]);
+    if let Some(raw_input) = raw_input {
+        command
+            .args([
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "bgra",
+                "-video_size",
+                "1280x800",
+                "-framerate",
+                &ENCODE_FPS.to_string(),
+                "-i",
+                "pipe:0",
+            ])
+            .stdin(Stdio::from(raw_input));
+    } else {
+        command.args(["-f", "lavfi", "-i", &input, "-vf", &filter]);
+    }
+    command.args(["-an", "-c:v", &encoder_name]);
+    match encoder_name.as_str() {
+        "libx264" => {
+            command.args(["-preset", "ultrafast", "-tune", "zerolatency"]);
+        }
+        "h264_amf" => {
+            command.args(["-usage", "ultralowlatency", "-quality", "speed"]);
+        }
+        "h264_nvenc" => {
+            command.args(["-preset", "p1", "-tune", "ull"]);
+        }
+        "h264_mf" => {}
+        _ => unreachable!(),
+    }
+    let output_format = if encoder_name == "libx264" || encoder_name == "h264_mf" {
+        "yuv420p"
+    } else {
+        "nv12"
+    };
+    let mut ffmpeg = command
         .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-stats_period",
-            "1",
-            "-progress",
-            "pipe:2",
-            "-nostdin",
-            "-f",
-            "lavfi",
-            "-i",
-        ])
-        .arg(input)
-        .args([
-            "-vf",
-            &filter,
-            "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-tune",
-            "zerolatency",
             "-bf",
             "0",
             "-g",
@@ -431,7 +520,7 @@ fn stream_h264_input(
             "-b:v",
             &ENCODE_BITRATE.to_string(),
             "-pix_fmt",
-            "yuv420p",
+            output_format,
             "-f",
             "mpegts",
             "-mpegts_flags",
@@ -519,6 +608,7 @@ fn stream_h264_input(
             ("width", &super::H264_WIDTH.to_string()),
             ("height", &super::H264_HEIGHT.to_string()),
             ("fps", &ENCODE_FPS.to_string()),
+            ("encoder", &encoder_name),
         ],
     );
 

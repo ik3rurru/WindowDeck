@@ -328,3 +328,8 @@ Se ejecutaron dos sesiones consecutivas con la misma Deck, resolución 1280 × 8
 La sesión WGC entregó el primer paquete en 915 ms y mostró una latencia perceptiblemente mayor. El usuario confirma que la ruta CPU era considerablemente mejor y que WGC resultó demasiado lenta. Evidencia: `target/deck-wgc-live-e76dcc6c2fcf4334b20ebe8fef577844/` y `/home/deck/Downloads/windowdeck-ab-wgc.log`.
 
 Resultado provisional: priorizar frames CPU directos para el modo experimental de baja latencia y conservar WGC como referencia y fallback. Esta comparación no mide latencia absoluta con cámara ni controla idénticamente el contenido. Ambas sesiones se cerraron y `--verify` confirmó la retirada del monitor virtual.
+## Evaluación de encoders H.264 para rendimiento — 8 de septiembre de 2026
+
+Se compararon encoders con la ruta real de frames CPU del driver. `libx264` mantiene unos 50 FPS efectivos. `h264_amf` (AMD) entregó el primer paquete en 411 ms y pasó de unos 35 FPS iniciales a aproximadamente 49 FPS. `h264_nvenc` (NVIDIA) entregó el primer paquete en 171 ms y rondó 60 FPS con escritorio estático, pero cayó a unos 30 FPS cuando llegaron frames con movimiento. Las pruebas sintéticas de 3 segundos a 1280 × 800 mostraron que AMF, NVENC y Media Foundation superan tiempo real, aunque ese resultado no reproduce la transferencia ni el contenido del escritorio.
+
+Conclusión: no cambiar todavía el valor predeterminado `libx264`; ningún hardware probado ofrece una mejora sostenida con movimiento. El cuello de botella probable es la transferencia BGRA y el backpressure entre el auxiliar, FFmpeg y el socket. Se añadió `WINDOWDECK_H264_ENCODER` para futuras pruebas sin recompilar. Las sesiones reales se cerraron y `--verify` confirmó el monitor virtual inactivo.
