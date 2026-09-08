@@ -56,7 +56,7 @@ inline Slot* ClaimWriter(Shared* shared, UINT start) {
     }
     return nullptr;
 }
-inline void CopyRows(BYTE* destination, const BYTE* source, UINT pitch) {
+inline void CopyRows(BYTE* destination, const BYTE* source, UINT pitch) {`r`n    if (pitch == Stride) {`r`n        memcpy(destination, source, Bytes);`r`n        return;`r`n    }
     for (UINT y = 0; y < Height; ++y) memcpy(destination + y * Stride, source + static_cast<size_t>(y) * pitch, Stride);
 }
 }
