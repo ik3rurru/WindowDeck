@@ -458,7 +458,7 @@ fn forward_h264(
                             ("bytes", &bytes.to_string()),
                             ("chunks", &chunks.to_string()),
                             (
-                                "fps",
+                                "chunks_per_sec",
                                 &format!(
                                     "{:.1}",
                                     report_chunks as f64
