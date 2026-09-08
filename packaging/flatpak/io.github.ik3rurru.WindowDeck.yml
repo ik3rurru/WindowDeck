@@ -25,6 +25,8 @@ modules:
       - command -v ffplay
       - cargo build --locked --release -p windowdeck-client
       - install -Dm0755 target/release/windowdeck-client /app/bin/windowdeck-client
+      - install -Dm0644 packaging/WindowDeck.desktop /app/share/applications/io.github.ik3rurru.WindowDeck.desktop
+      - sed -i 's|^Exec=.*|Exec=windowdeck-client --h264-test --fullscreen|' /app/share/applications/io.github.ik3rurru.WindowDeck.desktop
     sources:
       - type: dir
         path: ../..

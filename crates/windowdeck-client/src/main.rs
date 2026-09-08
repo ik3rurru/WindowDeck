@@ -22,7 +22,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy, OwnedDisplay
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-const DEFAULT_ADDRESS: &str = "127.0.0.1:48150";
+mod host_picker;
+const DEFAULT_ADDRESS: &str = "auto";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -38,7 +39,20 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let options = parse_options(env::args().skip(1))?;
+    let mut options = parse_options(env::args().skip(1))?;
+    if options.address == "auto" {
+        let codec = if options.h264_test { "h264" } else { "rgb332" };
+        let hosts = windowdeck_protocol::discovery::browse(codec, None)?;
+        let selected = if hosts.len() == 1 {
+            Some(0)
+        } else {
+            host_picker::choose(&hosts)?
+        };
+        let Some(index) = selected else {
+            return Ok(());
+        };
+        options.address = format!("mdns:{}", hosts[index].identity);
+    }
     if options.h264_test {
         return receive_h264_test(
             &options.address,
@@ -103,6 +117,9 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     if ffplay_baseline && !h264_test {
         return Err("--ffplay-baseline requiere --h264-test");
     }
+    if address.as_deref().is_none_or(|value| value == "auto") {
+        h264_test = true;
+    }
     Ok(Options {
         address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
         fullscreen,
@@ -112,10 +129,26 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
 }
 
 fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> {
-    let socket: SocketAddr = address
-        .parse()
-        .map_err(|_| "dirección inválida; usa IP:puerto")?;
-    let mut stream = TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT)?;
+    let mut stream = if let Some(identity) = address.strip_prefix("mdns:") {
+        let codec = if codec == VideoCodec::H264 {
+            "h264"
+        } else {
+            "rgb332"
+        };
+        let hosts = windowdeck_protocol::discovery::browse(codec, Some(identity))?;
+        let host = hosts.first().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "El PC no esta disponible en la red",
+            )
+        })?;
+        windowdeck_protocol::discovery::connect_host(host)?
+    } else {
+        let socket: SocketAddr = address
+            .parse()
+            .map_err(|_| "dirección inválida; usa IP:puerto")?;
+        TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT)?
+    };
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -1083,7 +1116,7 @@ mod tests {
             Ok(Options {
                 address: DEFAULT_ADDRESS.into(),
                 fullscreen: false,
-                h264_test: false,
+                h264_test: true,
                 ffplay_baseline: false,
             })
         );

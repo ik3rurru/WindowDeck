@@ -198,6 +198,24 @@ fn run_server(
         return Err("la captura de pantalla solo está disponible en Windows".into());
     }
     let listener = TcpListener::bind(&address)?;
+    let _announcement = match windowdeck_protocol::discovery::advertise(
+        listener.local_addr()?,
+        if codec == VideoCodec::H264 {
+            "h264"
+        } else {
+            "rgb332"
+        },
+    ) {
+        Ok(service) => Some(service),
+        Err(error) => {
+            emit(
+                Level::Warn,
+                "discovery_unavailable",
+                &[("error", &error.to_string())],
+            );
+            None
+        }
+    };
     emit(Level::Info, "host_listening", &[("address", &address)]);
 
     loop {

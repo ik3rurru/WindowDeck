@@ -7,3 +7,6 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+mdns-sd = "0.21.1"
