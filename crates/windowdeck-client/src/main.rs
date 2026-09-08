@@ -404,6 +404,7 @@ fn forward_h264(
     let mut last_report = Instant::now();
     let mut bytes = 0_u64;
     let mut chunks = 0_u64;
+    let mut chunks_at_report = 0_u64;
     loop {
         let message = match read_message(&mut reader) {
             Ok(message) => message,
@@ -445,6 +446,8 @@ fn forward_h264(
                 }
                 if last_report.elapsed() >= Duration::from_secs(1) {
                     let elapsed = started.elapsed();
+                    let report_elapsed = last_report.elapsed();
+                    let report_chunks = chunks.saturating_sub(chunks_at_report);
                     let mbps =
                         bytes as f64 * 8.0 / elapsed.as_secs_f64().max(f64::EPSILON) / 1_000_000.0;
                     emit(
@@ -454,9 +457,18 @@ fn forward_h264(
                             ("elapsed_ms", &elapsed.as_millis().to_string()),
                             ("bytes", &bytes.to_string()),
                             ("chunks", &chunks.to_string()),
+                            (
+                                "fps",
+                                &format!(
+                                    "{:.1}",
+                                    report_chunks as f64
+                                        / report_elapsed.as_secs_f64().max(f64::EPSILON)
+                                ),
+                            ),
                             ("mbps", &format!("{mbps:.2}")),
                         ],
                     );
+                    chunks_at_report = chunks;
                     last_report = Instant::now();
                 }
             }
