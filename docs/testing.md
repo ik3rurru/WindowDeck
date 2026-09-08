@@ -315,3 +315,9 @@ Evidencia: `target/deck-suspend-retry-72c33b15279247e6b211f8ae3c95d1ab/observati
 El Flatpak actualizado desde commit `52c4fca` se probó en la Deck durante una suspensión real. El cliente detectó `Resource temporarily unavailable (os error 11)`, mantuvo la ventana abierta y reconectó: `h264_reconnected` a las 07:25:03 UTC, primer paquete de la sesión nueva 448 ms después. El usuario confirmó que la imagen se recuperó, con latencia inicial notable que se estabilizó, y consideró aceptable el resultado.
 
 Tras cerrar la prueba se detuvo la instancia Flatpak y el broker CPU. `--verify` devolvió 4; no quedaron monitor virtual, FFmpeg ni auxiliar. Evidencia: `target/deck-cpu-live-e34b5af439ee4f249f437616939dbdb7/host.log` y `/home/deck/Downloads/windowdeck-reconnect-final.log`. La sesión nueva se negocia después de la suspensión; no se conserva el socket TCP original. Quedan como mejoras la recuperación visual inicial y las pruebas de bloqueo/cambio de usuario.
+
+## Bloqueo de Windows y recuperación H.264 — 8 de septiembre de 2026
+
+Con el Flatpak actualizado y la ruta CPU activa, se bloqueó Windows con `Win + L` y se desbloqueó después. El cliente detectó la interrupción, mantuvo la ventana y reconectó una sesión H.264 nueva: `h264_connection_lost` a las 07:34:39 UTC, `h264_reconnected` a las 07:35:02 y primer paquete 581 ms después. El usuario confirma que bloqueo y suspensión funcionan a la perfección; al recuperar la imagen la latencia inicial es similar a la del arranque y se estabiliza.
+
+Tras cerrar la sesión se detuvieron cliente, host y broker; `--verify` devolvió 4 y no quedaron monitor virtual, FFmpeg ni auxiliares. Evidencia: `target/deck-cpu-live-1da441ce883a4fbc8ac86dedec668d78/` y `/home/deck/Downloads/windowdeck-lock-test.log`. Quedan comparación A/B con WGC, recuperación visual inicial y cambio de usuario prolongado.
