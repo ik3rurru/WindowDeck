@@ -12,7 +12,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{
-    ConnectionEvent, ConnectionState, Message, VideoCodec, read_message, write_message,
+    ConnectionEvent, ConnectionState, Message, ProtocolError, VideoCodec, read_message,
+    write_message,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -246,10 +247,21 @@ fn receive_h264_test(
         &[("buffering", if baseline { "baseline" } else { "reduced" })],
     );
     let input = player.stdin.take().ok_or("ffplay no abrió su entrada")?;
-    let shutdown = stream.try_clone()?;
+    let shutdown = Arc::new(Mutex::new(stream.try_clone()?));
     let stopping = Arc::new(AtomicBool::new(false));
     let worker_stopping = Arc::clone(&stopping);
-    let worker = thread::spawn(move || forward_h264(stream, input, session_id, &worker_stopping));
+    let worker_shutdown = Arc::clone(&shutdown);
+    let address = address.to_owned();
+    let worker = thread::spawn(move || {
+        reconnect_h264(
+            stream,
+            session_id,
+            &address,
+            input,
+            &worker_stopping,
+            &worker_shutdown,
+        )
+    });
     let player_closed = loop {
         if worker.is_finished() {
             break false;
@@ -261,7 +273,9 @@ fn receive_h264_test(
     };
     if player_closed {
         stopping.store(true, Ordering::Relaxed);
-        let _ = shutdown.shutdown(Shutdown::Both);
+        if let Ok(socket) = shutdown.lock() {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
     }
     let forwarded = worker
         .join()
@@ -273,16 +287,111 @@ fn receive_h264_test(
     if !status.success() {
         return Err(format!("ffplay terminó con {status}").into());
     }
-    let (bytes, chunks) = forwarded?;
-    emit(
-        Level::Info,
-        "h264_stream_stopped",
-        &[
-            ("bytes", &bytes.to_string()),
-            ("chunks", &chunks.to_string()),
-        ],
-    );
+    forwarded?;
+    emit(Level::Info, "h264_stream_stopped", &[]);
     Ok(())
+}
+
+fn transport_error(error: &(dyn Error + 'static)) -> bool {
+    let io =
+        error
+            .downcast_ref::<io::Error>()
+            .or_else(|| match error.downcast_ref::<ProtocolError>() {
+                Some(ProtocolError::Io(error)) => Some(error),
+                _ => None,
+            });
+    io.is_some_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::TimedOut
+                | io::ErrorKind::WouldBlock
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::ConnectionRefused
+                | io::ErrorKind::NotConnected
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::NetworkUnreachable
+                | io::ErrorKind::HostUnreachable
+                | io::ErrorKind::Interrupted
+        )
+    })
+}
+
+fn reconnect_h264(
+    mut stream: TcpStream,
+    mut session_id: u64,
+    address: &str,
+    mut input: impl Write,
+    stopping: &AtomicBool,
+    shutdown: &Mutex<TcpStream>,
+) -> io::Result<()> {
+    loop {
+        // Keep the same player and its stdin alive across transport failures. This
+        // leaves the window's X available while offline and avoids an EOF/autoexit race.
+        let result = forward_h264(&mut stream, &mut input, session_id, stopping);
+        if stopping.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match result {
+            Ok((bytes, chunks)) => {
+                emit(
+                    Level::Info,
+                    "h264_session_stopped",
+                    &[
+                        ("bytes", &bytes.to_string()),
+                        ("chunks", &chunks.to_string()),
+                    ],
+                );
+                return Ok(()); // Explicit Stop or the player closed its pipe.
+            }
+            Err(error) if transport_error(&error) => {
+                emit(
+                    Level::Warn,
+                    "h264_connection_lost",
+                    &[("error", &error.to_string())],
+                );
+            }
+            Err(error) => return Err(error),
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        loop {
+            let until = Instant::now() + RECONNECT_DELAY;
+            while Instant::now() < until {
+                if stopping.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            match connect(address, VideoCodec::H264) {
+                Ok((next, id, ..)) => {
+                    let mut watched = shutdown
+                        .lock()
+                        .map_err(|_| io::Error::other("socket lock poisoned"))?;
+                    if stopping.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    *watched = next.try_clone()?;
+                    stream = next;
+                    session_id = id;
+                    emit(
+                        Level::Info,
+                        "h264_reconnected",
+                        &[("session_id", &id.to_string())],
+                    );
+                    break;
+                }
+                Err(error) if transport_error(error.as_ref()) => {
+                    emit(
+                        Level::Info,
+                        "h264_reconnect_wait",
+                        &[("error", &error.to_string())],
+                    );
+                }
+                Err(error) => return Err(io::Error::other(error.to_string())),
+            }
+        }
+    }
 }
 
 fn forward_h264(
@@ -299,7 +408,8 @@ fn forward_h264(
         let message = match read_message(&mut reader) {
             Ok(message) => message,
             Err(_) if stopping.load(Ordering::Relaxed) => break,
-            Err(error) => return Err(io::Error::other(error)),
+            Err(ProtocolError::Io(error)) => return Err(error),
+            Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
         };
         match message {
             Message::VideoChunk {
@@ -790,6 +900,124 @@ fn color(value: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn h264_reconnects_with_new_session_and_resets_chunk_sequence() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let client = TcpStream::connect(&address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let server = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let packet = |id, value| Message::VideoChunk {
+                session_id: id,
+                frame_number: 0,
+                captured_micros: 0,
+                fragment_index: 0,
+                fragment_count: 1,
+                keyframe: true,
+                payload: vec![value],
+            };
+            write_message(&mut first, &packet(10, 1)).unwrap();
+            drop(first); // EOF without Stop is a transport failure.
+            let (mut second, _) = listener.accept().unwrap();
+            second
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            assert!(matches!(
+                read_message(&mut second).unwrap(),
+                Message::Hello { .. }
+            ));
+            write_message(
+                &mut second,
+                &Message::Hello {
+                    app_version: "test".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message(&mut second).unwrap(),
+                Message::Capabilities { .. }
+            ));
+            write_message(
+                &mut second,
+                &Message::SessionConfig {
+                    session_id: 20,
+                    width: 1280,
+                    height: 800,
+                    fps: 60,
+                    codec: VideoCodec::H264,
+                },
+            )
+            .unwrap();
+            write_message(&mut second, &Message::Start).unwrap();
+            write_message(&mut second, &packet(20, 2)).unwrap();
+            write_message(&mut second, &Message::Stop).unwrap();
+        });
+        let shutdown = Mutex::new(client.try_clone().unwrap());
+        let mut output = Vec::new();
+        reconnect_h264(
+            client,
+            10,
+            &address,
+            &mut output,
+            &AtomicBool::new(false),
+            &shutdown,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(output, [1, 2]);
+    }
+
+    #[test]
+    fn closing_player_during_reconnect_wait_prevents_new_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let client = TcpStream::connect(&address).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        drop(server);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::clone(&stopping);
+        let shutdown = Mutex::new(client.try_clone().unwrap());
+        let worker = thread::spawn(move || {
+            reconnect_h264(client, 1, &address, Vec::new(), &cancel, &shutdown)
+        });
+        thread::sleep(Duration::from_millis(100));
+        stopping.store(true, Ordering::Relaxed);
+        worker.join().unwrap().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn reconnect_retries_transport_but_rejects_protocol_errors() {
+        assert!(transport_error(&ProtocolError::Io(io::Error::from(
+            io::ErrorKind::WouldBlock
+        ))));
+        assert!(transport_error(&io::Error::from(
+            io::ErrorKind::ConnectionRefused
+        )));
+        assert!(!transport_error(&ProtocolError::UnsupportedVersion(99)));
+        assert!(!transport_error(&io::Error::from(
+            io::ErrorKind::InvalidData
+        )));
+        let mut bytes = Vec::new();
+        write_message(
+            &mut bytes,
+            &Message::Hello {
+                app_version: "wrong".into(),
+            },
+        )
+        .unwrap();
+        let error =
+            forward_h264(bytes.as_slice(), Vec::new(), 1, &AtomicBool::new(false)).unwrap_err();
+        assert!(!transport_error(&error));
+    }
 
     #[test]
     fn frame_is_scaled_with_letterboxing() {
