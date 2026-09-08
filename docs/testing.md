@@ -321,3 +321,10 @@ Tras cerrar la prueba se detuvo la instancia Flatpak y el broker CPU. `--verify`
 Con el Flatpak actualizado y la ruta CPU activa, se bloqueó Windows con `Win + L` y se desbloqueó después. El cliente detectó la interrupción, mantuvo la ventana y reconectó una sesión H.264 nueva: `h264_connection_lost` a las 07:34:39 UTC, `h264_reconnected` a las 07:35:02 y primer paquete 581 ms después. El usuario confirma que bloqueo y suspensión funcionan a la perfección; al recuperar la imagen la latencia inicial es similar a la del arranque y se estabiliza.
 
 Tras cerrar la sesión se detuvieron cliente, host y broker; `--verify` devolvió 4 y no quedaron monitor virtual, FFmpeg ni auxiliares. Evidencia: `target/deck-cpu-live-1da441ce883a4fbc8ac86dedec668d78/` y `/home/deck/Downloads/windowdeck-lock-test.log`. Quedan comparación A/B con WGC, recuperación visual inicial y cambio de usuario prolongado.
+## Comparación A/B CPU frente a WGC en Steam Deck — 8 de septiembre de 2026
+
+Se ejecutaron dos sesiones consecutivas con la misma Deck, resolución 1280 × 800, 60 FPS configurados, libx264 y objetivo de 16 Mbps. La sesión CPU directa entregó el primer paquete en 494 ms y mantuvo unos 50,26 FPS efectivos. Evidencia: `target/deck-cpu-live-b6c32cd7121140caa2ef79eddcf19967/` y `/home/deck/Downloads/windowdeck-ab-cpu.log`.
+
+La sesión WGC entregó el primer paquete en 915 ms y mostró una latencia perceptiblemente mayor. El usuario confirma que la ruta CPU era considerablemente mejor y que WGC resultó demasiado lenta. Evidencia: `target/deck-wgc-live-e76dcc6c2fcf4334b20ebe8fef577844/` y `/home/deck/Downloads/windowdeck-ab-wgc.log`.
+
+Resultado provisional: priorizar frames CPU directos para el modo experimental de baja latencia y conservar WGC como referencia y fallback. Esta comparación no mide latencia absoluta con cámara ni controla idénticamente el contenido. Ambas sesiones se cerraron y `--verify` confirmó la retirada del monitor virtual.
