@@ -477,6 +477,8 @@ fn stream_h264_input(
     if let Some(raw_input) = raw_input {
         command
             .args([
+                "-thread_queue_size",
+                "2",
                 "-f",
                 "rawvideo",
                 "-pixel_format",
@@ -495,7 +497,14 @@ fn stream_h264_input(
     command.args(["-an", "-c:v", &encoder_name]);
     match encoder_name.as_str() {
         "libx264" => {
-            command.args(["-preset", "ultrafast", "-tune", "zerolatency"]);
+            command.args([
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-x264-params",
+                "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0",
+            ]);
         }
         "h264_amf" => {
             command.args(["-usage", "ultralowlatency", "-quality", "speed"]);
