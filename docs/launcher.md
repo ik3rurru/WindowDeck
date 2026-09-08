@@ -2,6 +2,7 @@
 
 Abrir `WindowDeck.vbs` en la raiz del proyecto o el acceso directo WindowDeck
 del escritorio de Windows. El panel ofrece Iniciar, Detener y Ver registros.
+El icono de la ventana y del acceso directo procede de `assets/WindowDeck.ico`.
 Iniciar solicita UAC solo para el broker; el host conserva permisos normales.
 Se requieren el driver instalado, FFmpeg en PATH y los binarios compilados en
 `target/debug` y `target/windows-idd`. El lanzador no instala el driver ni cambia

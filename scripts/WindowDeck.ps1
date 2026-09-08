@@ -38,6 +38,7 @@ $form.ClientSize = New-Object Drawing.Size(480,210)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
+$form.Icon = New-Object Drawing.Icon (Join-Path $root 'assets/WindowDeck.ico')
 $status = New-Object Windows.Forms.Label
 $status.SetBounds(20,20,440,65)
 $status.Text = 'Detenido. Pulsa Iniciar y abre WindowDeck en la Steam Deck.'
