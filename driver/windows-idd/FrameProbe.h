@@ -1,5 +1,6 @@
 #pragma once
 #include "FrameExchange.h"
+#include "FramePacing.h"
 #include "GpuFrames.h"
 #include "RenderAdapter.h"
 #include <objbase.h>
@@ -46,6 +47,11 @@ struct FrameMapping {
 };
 
 inline void FrameExchangeSelfTest() {
+    FrameSchedule schedule{0, 60000};
+    assert(schedule.Deadline() == 0);
+    assert(schedule.Advance(100) == 0 && schedule.Deadline() == 1000);
+    assert(schedule.Advance(3500) == 2 && schedule.Deadline() == 4000);
+    assert(schedule.Advance(4100) == 0 && schedule.Deadline() == 5000);
     assert(FrameExchange::ValidName(L"Global\\WindowDeck.Frames.01234567-89ab-cdef-0123-456789abcdef"));
     assert(!FrameExchange::ValidName(L"Local\\WindowDeck.Frames.01234567-89ab-cdef-0123-456789abcdef"));
     assert(!FrameExchange::ValidName(L"Global\\WindowDeck.Frames...\\other"));
@@ -125,12 +131,19 @@ inline int StreamCpuFrames(HANDLE pipe) {
     if (memory->magic == FrameExchange::Magic && memory->version == 1) {
         auto pixels = std::make_unique<BYTE[]>(FrameExchange::Bytes);
         UINT64 previous = 0, outputs = 0, fresh = 0, writeMicros = 0, maxWriteMicros = 0;
-        const ULONGLONG started = GetTickCount64();
-        ULONGLONG next = started, report = started;
+        LARGE_INTEGER clockFrequency;
+        QueryPerformanceFrequency(&clockFrequency);
+        const UINT64 frequency = clockFrequency.QuadPart;
+        FrameTimer timer;
+        if (!timer.handle) { UnmapViewOfFile(memory); CloseHandle(mapping); return 1; }
+        const UINT64 started = FrameClock();
+        FrameSchedule schedule{started, frequency};
+        UINT64 report = started, reportOutputs = 0, skipped = 0;
+        UINT64 intervalWriteUs = 0, intervalMaxWriteUs = 0;
         while (InterlockedCompareExchange(&memory->error, 0, 0) == 0) {
             DWORD available = 0;
             if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) || available) break;
-            if (GetTickCount64() < next) { Sleep(1); continue; }
+            if (!timer.Wait(schedule.Deadline(), frequency)) break;
             for (auto& slot : memory->slots) {
                 if (InterlockedCompareExchange(&slot.state, FrameExchange::Reading, FrameExchange::Ready) != FrameExchange::Ready) continue;
                 const auto packet = slot.packet;
@@ -140,20 +153,26 @@ inline int StreamCpuFrames(HANDLE pipe) {
                 InterlockedExchange(&slot.state, FrameExchange::Free);
             }
             if (!previous) {
-                if (GetTickCount64() - started > 8000) break;
+                if (FrameClock() - started > frequency * 8) break;
                 Sleep(1); continue;
             }
             // Repeat the latest desktop for CFR, including a completely static desktop.
-            const ULONGLONG writeStarted = GetTickCount64();
+            const UINT64 writeStarted = FrameClock();
             if (!WriteBytes(GetStdHandle(STD_OUTPUT_HANDLE), pixels.get(), FrameExchange::Bytes)) break;
-            const UINT64 writeUs = (GetTickCount64() - writeStarted) * 1000;
+            const UINT64 now = FrameClock();
+            const UINT64 writeUs = (now - writeStarted) * 1000000 / frequency;
+            intervalWriteUs += writeUs; intervalMaxWriteUs = std::max(intervalMaxWriteUs, writeUs);
             writeMicros += writeUs; maxWriteMicros = std::max(maxWriteMicros, writeUs);
             ++outputs;
-            const ULONGLONG now = GetTickCount64();
-            next = started + (((now - started) * 60 / 1000 + 1) * 1000 + 59) / 60;
-            if (now - report >= 1000) {
+            skipped += schedule.Advance(now);
+            if (now - report >= frequency) {
                 fprintf(stderr, "driver_cpu_stream outputs=%llu fresh=%llu last_sequence=%llu elapsed_ms=%llu write_mean_us=%llu write_max_us=%llu\n",
-                    outputs, fresh, previous, now - started, outputs ? writeMicros / outputs : 0, maxWriteMicros);
+                    outputs, fresh, previous, (now - started) * 1000 / frequency, outputs ? writeMicros / outputs : 0, maxWriteMicros);
+                const UINT64 intervalOutputs = outputs - reportOutputs;
+                fprintf(stderr, "driver_cpu_interval fps=%.3f write_mean_us=%llu write_max_us=%llu missed_deadlines=%llu\n",
+                    intervalOutputs * static_cast<double>(frequency) / (now - report),
+                    intervalOutputs ? intervalWriteUs / intervalOutputs : 0, intervalMaxWriteUs, skipped);
+                reportOutputs = outputs; intervalWriteUs = intervalMaxWriteUs = skipped = 0;
                 report = now;
             }
         }

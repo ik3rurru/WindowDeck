@@ -29,8 +29,8 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
-    <Link><AdditionalDependencies>swdevice.lib;cfgmgr32.lib;advapi32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>d3d11.lib;dxgi.lib;gdi32.lib;swdevice.lib;cfgmgr32.lib;advapi32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="Control.cpp" /><ClInclude Include="DisplayMode.h" /><ClInclude Include="FrameExchange.h" /><ClInclude Include="FrameProbe.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="Control.cpp" /><ClInclude Include="DisplayMode.h" /><ClInclude Include="FrameExchange.h" /><ClInclude Include="FrameProbe.h" /><ClInclude Include="GpuFrames.h" /><ClInclude Include="RenderAdapter.h" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

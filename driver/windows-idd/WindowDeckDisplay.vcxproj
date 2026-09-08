@@ -39,13 +39,15 @@
       <PreprocessorDefinitions>UMDF_DRIVER;_WIN64;_AMD64_;AMD64;IDDCX_VERSION_MAJOR=$(IDDCX_VERSION_MAJOR);IDDCX_VERSION_MINOR=$(IDDCX_VERSION_MINOR);IDDCX_MINIMUM_VERSION_REQUIRED=$(IDDCX_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link><AdditionalDependencies>%(AdditionalDependencies);OneCoreUAP.lib;avrt.lib;gdi32.lib</AdditionalDependencies></Link>
-    <Inf><DateStamp>09/07/2026</DateStamp><TimeStamp>0.1.0.8</TimeStamp></Inf>
+    <Inf><DateStamp>09/07/2026</DateStamp><TimeStamp>0.1.0.9</TimeStamp></Inf>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Driver.cpp" />
     <ClInclude Include="DisplayMode.h" />
     <ClInclude Include="FrameExchange.h" />
     <ClInclude Include="FramePublisher.h" />
+    <ClInclude Include="GpuFrames.h" />
+    <ClInclude Include="RenderAdapter.h" />
     <Inf Include="WindowDeckDisplay.inf" />
     <ResourceCompile Include="WindowDeckDisplay.rc" />
     <FilesToPackage Include="$(TargetPath)" />

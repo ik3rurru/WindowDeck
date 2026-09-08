@@ -29,7 +29,7 @@ struct alignas(64) Shared {
     UINT magic, version, width, height;
     volatile LONG active, error;
     volatile LONG64 acquired, published, skipped, generation;
-    UINT reserved[2];
+    UINT reserved[2]; // version 2: broker-selected adapter LUID (fixed 8 bytes)
     Slot slots[SlotCount];
 };
 static_assert(offsetof(Shared, slots) == 64);

@@ -205,3 +205,9 @@ X solicita retirada. Desde otra terminal, `--verify` comprueba la ruta activa y 
 ## Persistencia en Git
 
 El punto de control posterior a `3b0cd4f` (buffering de FFplay) reúne el driver Windows, la integración del host, los ADR 0008–0011 y la documentación de pruebas y continuidad. Los cambios previos de Wi-Fi se conservan. Los paquetes firmados, binarios y registros de `target/` siguen siendo evidencia local ignorada por Git; conservarlos al retomar. El commit es local y no se ha hecho push.
+
+## Cierre de FPS — 2026-09-08
+
+El usuario acepta la transmisión durante el uso normal y considera esperables los FPS bajos al arrancar los scripts y establecer comunicación. Se pausa la optimización: no continuar automáticamente con encoder GPU ni más pruebas de rendimiento. Se conserva CPU H.264/libx264 con temporización QPC, temporizador de alta resolución y métricas por intervalo. Esta aceptación no certifica 60 FPS presentados de forma continua.
+
+Detalle de cambios, evidencia, correcciones de interpretaciones anteriores y validación: [revisión de cadencia](fps-pacing-review.md). La última sesión quedó activa para el usuario en `target/deck-cpu-live-611371701eef48a89fb6518ee6b2f95a/`; verificar identidad de procesos antes de usar PID guardados. El Flatpak b60158e sirve para estos cambios del host. Compilar una DLL no actualiza el driver instalado.

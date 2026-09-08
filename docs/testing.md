@@ -336,3 +336,9 @@ Conclusión: no cambiar todavía el valor predeterminado `libx264`; ningún hard
 ## Instrumentación de backpressure — 8 de septiembre de 2026
 
 Se limitó la cola de entrada de FFmpeg a dos frames y se añadieron parámetros x264 de baja latencia (`sync-lookahead=0`, `rc-lookahead=0`, una referencia y sin scenecut). El auxiliar registra `write_mean_us` y `write_max_us` para cuantificar cuánto bloquea la escritura BGRA cuando el encoder no alcanza la cadencia. El perfil predeterminado sigue siendo libx264; la instrumentación no cambia por sí sola la calidad ni la resolución. Pasan build WDK/autoprueba, los 22 tests Rust, formato y Clippy.
+
+## Cierre de FPS — 2026-09-08
+
+El usuario acepta la transmisión durante el uso normal y considera esperables los FPS bajos al arrancar los scripts y establecer comunicación. Se pausa la optimización: no continuar automáticamente con encoder GPU ni más pruebas de rendimiento. Se conserva CPU H.264/libx264 con temporización QPC, temporizador de alta resolución y métricas por intervalo. Esta aceptación no certifica 60 FPS presentados de forma continua.
+
+Detalle de cambios, evidencia, correcciones de interpretaciones anteriores y validación: [revisión de cadencia](fps-pacing-review.md). La última sesión quedó activa para el usuario en `target/deck-cpu-live-611371701eef48a89fb6518ee6b2f95a/`; verificar identidad de procesos antes de usar PID guardados. El Flatpak b60158e sirve para estos cambios del host. Compilar una DLL no actualiza el driver instalado.

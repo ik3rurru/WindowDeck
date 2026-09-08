@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$Gpu, [string]$ExpectedVersion = '0.1.0.9')
 $ErrorActionPreference = 'Stop'
 $testRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $displayExe = Join-Path $testRoot 'target/windows-idd/windowdeck-display.exe'
@@ -30,16 +30,17 @@ function Wait-Inactive {
 if ((Display-Code) -ne 4) { throw 'Close the active display before the frame probe' }
 $physical = @(Get-PnpDevice -PresentOnly | Where-Object { $_.Class -in @('Display','Monitor') } | Select-Object -ExpandProperty InstanceId)
 $probe = $null
+$probeMode = if ($Gpu) { '--gpu-frame-test' } else { '--driver-frame-test' }
 try {
     foreach ($cycle in 1..3) {
-        $probe = Start-Process -FilePath $hostExe -ArgumentList '--driver-frame-test' -WindowStyle Hidden -RedirectStandardOutput (Join-Path $evidence "probe-$cycle.stdout.log") -RedirectStandardError (Join-Path $evidence "probe-$cycle.log") -PassThru
+        $probe = Start-Process -FilePath $hostExe -ArgumentList $probeMode -WindowStyle Hidden -RedirectStandardOutput (Join-Path $evidence "probe-$cycle.stdout.log") -RedirectStandardError (Join-Path $evidence "probe-$cycle.log") -PassThru
         $null = $probe.Handle
         $deadline = [DateTime]::UtcNow.AddSeconds(8)
         while ((Display-Code) -ne 0 -and !$probe.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if ((Display-Code) -ne 0) { throw 'Probe did not activate the monitor' }
         $properties = @(Get-PnpDeviceProperty -InstanceId 'SWD\WindowDeck\WindowDeckDisplay' -KeyName 'DEVPKEY_Device_DriverVersion','DEVPKEY_Device_DriverInfPath')
         $properties | Select-Object KeyName,Data | ConvertTo-Json | Set-Content (Join-Path $evidence "driver-$cycle.json")
-        if (($properties | Where-Object KeyName -eq 'DEVPKEY_Device_DriverVersion').Data -ne '0.1.0.8') { throw 'Wrong installed driver version' }
+        if (($properties | Where-Object KeyName -eq 'DEVPKEY_Device_DriverVersion').Data -ne $ExpectedVersion) { throw 'Wrong installed driver version' }
         if ($cycle -eq 2) {
             Start-Sleep -Milliseconds 500
             $probe.Kill()

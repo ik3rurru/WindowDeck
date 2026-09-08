@@ -6,7 +6,7 @@ ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
 ClassVer=2.0
 Provider=%Manufacturer%
 CatalogFile=WindowDeckDisplay.cat
-DriverVer=09/07/2026,0.1.0.8
+DriverVer=09/07/2026,0.1.0.9
 PnpLockDown=1
 
 [Manufacturer]

@@ -716,6 +716,7 @@ fn emit_stream_metrics(event: &str, started: Instant, bytes: u64, chunks: u64) {
 
 fn log_ffmpeg_progress(input: impl Read) -> io::Result<[String; 4]> {
     let mut metrics = ["0", "0", "N/A", "0x"].map(str::to_owned);
+    let mut previous = (Instant::now(), 0_u64);
     for line in BufReader::new(input).lines() {
         let line = line?;
         let Some((key, value)) = line.split_once('=') else {
@@ -729,16 +730,27 @@ fn log_ffmpeg_progress(input: impl Read) -> io::Result<[String; 4]> {
             "fps" => metrics[1] = value.into(),
             "bitrate" => metrics[2] = value.into(),
             "speed" => metrics[3] = value.into(),
-            "progress" => emit(
-                Level::Info,
-                "h264_encoder_metrics",
-                &[
-                    ("frames", &metrics[0]),
-                    ("fps", &metrics[1]),
-                    ("bitrate", &metrics[2]),
-                    ("speed", &metrics[3]),
-                ],
-            ),
+            "progress" => {
+                let now = Instant::now();
+                let frames = metrics[0].parse::<u64>().unwrap_or(previous.1);
+                let interval_fps = frames.saturating_sub(previous.1) as f64
+                    / now
+                        .duration_since(previous.0)
+                        .as_secs_f64()
+                        .max(f64::EPSILON);
+                emit(
+                    Level::Info,
+                    "h264_encoder_metrics",
+                    &[
+                        ("frames", &metrics[0]),
+                        ("fps", &metrics[1]),
+                        ("bitrate", &metrics[2]),
+                        ("speed", &metrics[3]),
+                        ("interval_fps", &format!("{interval_fps:.2}")),
+                    ],
+                );
+                previous = (now, frames);
+            }
             _ => {}
         }
     }

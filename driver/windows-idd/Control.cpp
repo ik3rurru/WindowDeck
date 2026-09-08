@@ -251,11 +251,11 @@ static bool PipeIdentity(std::wstring& name, std::wstring& sddl, std::wstring* l
     return true;
 }
 
-static int Broker(bool frames = false)
+static int Broker(bool frames = false, bool gpuMode = false)
 {
     std::wstring name, sddl, logon;
     if (!PipeIdentity(name, sddl, &logon)) return 1;
-    if (frames) name += L".FrameProbe";
+    if (frames) name += gpuMode ? L".GpuProbe" : L".FrameProbe";
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return 1;
     SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
@@ -272,7 +272,7 @@ static int Broker(bool frames = false)
     {
         if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) break;
         FrameMapping mapping;
-        if (!frames || mapping.Create(logon)) Run(false, pipe, frames ? &mapping : nullptr);
+        if (!frames || mapping.Create(logon, gpuMode)) Run(false, pipe, frames ? &mapping : nullptr);
         else fprintf(stderr, "Cannot create frame exchange: %lu\n", GetLastError());
         DisconnectNamedPipe(pipe);
     }
@@ -280,12 +280,17 @@ static int Broker(bool frames = false)
     return 1;
 }
 
-static int Lease(bool frames = false)
+static int Lease(bool frames = false, bool gpuMode = false, bool streaming = false)
 {
+    if (streaming) {
+        HANDLE watcher = CreateThread(nullptr, 0, WatchStreamHost, nullptr, 0, nullptr);
+        if (!watcher) return 1;
+        CloseHandle(watcher);
+    }
     if (frames) SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     std::wstring name, sddl;
     if (!PipeIdentity(name, sddl)) return 1;
-    if (frames) name += L".FrameProbe";
+    if (frames) name += gpuMode ? L".GpuProbe" : L".FrameProbe";
     // Identification prevents an impersonating pipe server from acquiring our privileges.
     HANDLE pipe = CreateFileW(name.c_str(), FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE,
         0, nullptr, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
@@ -296,7 +301,7 @@ static int Lease(bool frames = false)
             0, nullptr, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
     if (pipe == INVALID_HANDLE_VALUE)
     {
-        fprintf(stderr, "Display broker unavailable (%lu); start windowdeck-display %s as administrator in this logon.\n", GetLastError(), frames ? "--frame-broker" : "--broker");
+        fprintf(stderr, "Display broker unavailable (%lu); start windowdeck-display %s as administrator in this logon.\n", GetLastError(), frames ? (gpuMode ? "--gpu-frame-broker" : "--frame-broker") : "--broker");
         return 1;
     }
     const ULONGLONG deadline = GetTickCount64() + 8000;
@@ -313,7 +318,8 @@ static int Lease(bool frames = false)
     int result = 0;
     if (frames) {
         RECT bounds = {};
-        result = VerifyDisplay(false, true, &bounds) == 0 ? ReadProbeFrames(pipe, bounds) : 1;
+        result = VerifyDisplay(false, true, &bounds) == 0 ?
+            (streaming ? StreamCpuFrames(pipe) : ReadProbeFrames(pipe, bounds, gpuMode)) : 1;
     } else puts("READY");
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     while (!frames && PipeAlive(pipe) && PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) && !available) Sleep(50);
@@ -337,10 +343,15 @@ int wmain(int argc, wchar_t** argv)
     if (argc == 2 && wcscmp(argv[1], L"--probe") == 0) return Run(true);
     if (argc == 2 && wcscmp(argv[1], L"--broker") == 0) return Broker();
     if (argc == 2 && wcscmp(argv[1], L"--lease") == 0) return Lease();
+    if (argc == 2 && wcscmp(argv[1], L"--gpu-frame-broker") == 0) return Broker(true, true);
+    if (argc == 2 && wcscmp(argv[1], L"--gpu-frame-source") == 0) return Lease(true, true);
     if (argc == 2 && wcscmp(argv[1], L"--frame-broker") == 0) return Broker(true);
     if (argc == 2 && wcscmp(argv[1], L"--frame-source") == 0) return Lease(true);
+    if (argc == 2 && wcscmp(argv[1], L"--cpu-frame-stream") == 0) return Lease(true, false, true);
     puts("Usage: windowdeck-display --run | --probe | --verify | --source | --self-test\n--run and --probe require the installed driver and administrator privileges.\n--verify checks an existing active desktop without changing it (0: 1280x800@60, 4: inactive/wrong mode).\n--source prints only the GDI device name of that verified WindowDeck desktop.");
     puts("--broker: elevated local controller; creates a monitor only while --lease holds a connection.\n--lease: host helper; READY on stdout, stdin EOF releases the monitor. Do not run interactively.");
+    puts("--gpu-frame-broker / --gpu-frame-source: optional D3D11 shared-texture probe.");
+    puts("--cpu-frame-stream: continuous raw BGRA desktop at 60 FPS for the host; stdin EOF releases the display.");
     puts("--frame-broker: elevated controller for the optional shared-memory frame probe.\n--frame-source: binary BGRA probe helper, launched by windowdeck-host --driver-frame-test.");
     return argc == 1 || (argc == 2 && wcscmp(argv[1], L"--help") == 0) ? 0 : 2;
 }
