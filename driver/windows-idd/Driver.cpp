@@ -15,38 +15,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-// ponytail: prefer the low-power GPU for this prototype; tune this preference for other GPU combinations.
-constexpr auto RenderPreference = DXGI_GPU_PREFERENCE_MINIMUM_POWER;
-
-static HRESULT PreferredRenderAdapter(LUID& luid)
-{
-    ComPtr<IDXGIFactory6> factory;
-    HRESULT result = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
-    if (FAILED(result)) return result;
-    for (UINT index = 0; ; ++index)
-    {
-        ComPtr<IDXGIAdapter1> adapter;
-        result = factory->EnumAdapterByGpuPreference(index, RenderPreference, IID_PPV_ARGS(&adapter));
-        if (FAILED(result)) return result;
-        DXGI_ADAPTER_DESC1 description = {};
-        result = adapter->GetDesc1(&description);
-        if (FAILED(result)) return result;
-        D3DKMT_OPENADAPTERFROMLUID opened = {description.AdapterLuid, 0};
-        if (!NT_SUCCESS(D3DKMTOpenAdapterFromLuid(&opened))) continue;
-        D3DKMT_ADAPTERTYPE type = {};
-        D3DKMT_QUERYADAPTERINFO query = {opened.hAdapter, KMTQAITYPE_ADAPTERTYPE, &type, sizeof(type)};
-        NTSTATUS status = D3DKMTQueryAdapterInfo(&query);
-        D3DKMT_CLOSEADAPTER close = {opened.hAdapter};
-        NTSTATUS closed = D3DKMTCloseAdapter(&close);
-        if (!NT_SUCCESS(closed)) return HRESULT_FROM_NT(closed);
-        // DXGI can expose this IDD under its render GPU's name; only select real render adapters.
-        if (NT_SUCCESS(status) && type.RenderSupported && !type.IndirectDisplayDevice && !type.SoftwareDevice)
-        {
-            luid = description.AdapterLuid;
-            return S_OK;
-        }
-    }
-}
+#include "RenderAdapter.h"
 
 struct DeviceContext { IDDCX_ADAPTER adapter; wchar_t frameMapping[128]; };
 WDF_DECLARE_CONTEXT_TYPE(DeviceContext);
@@ -138,6 +107,9 @@ static HRESULT ConsumeFrames(MonitorContext* context)
         // Queue GPU copy before FinishedProcessingFrame, as required by IddCx.
         // This optional probe does not encode or transmit frames to the Deck.
         publisher.Submit(surface.Get(), acquired.QuadPart, buffer.MetaData.PresentationFrameNumber);
+        // Try to retire a completed copy immediately so the next callback can
+        // reuse the staging slot instead of waiting for another desktop frame.
+        publisher.Drain();
         surface.Reset();
         result = IddCxSwapChainFinishedProcessingFrame(context->swapChain);
         if (FAILED(result)) return result;
