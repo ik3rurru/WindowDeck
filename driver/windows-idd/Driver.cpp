@@ -107,9 +107,6 @@ static HRESULT ConsumeFrames(MonitorContext* context)
         // Queue GPU copy before FinishedProcessingFrame, as required by IddCx.
         // This optional probe does not encode or transmit frames to the Deck.
         publisher.Submit(surface.Get(), acquired.QuadPart, buffer.MetaData.PresentationFrameNumber);
-        // Try to retire a completed copy immediately so the next callback can
-        // reuse the staging slot instead of waiting for another desktop frame.
-        publisher.Drain();
         surface.Reset();
         result = IddCxSwapChainFinishedProcessingFrame(context->swapChain);
         if (FAILED(result)) return result;
