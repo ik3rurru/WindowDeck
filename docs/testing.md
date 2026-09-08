@@ -254,6 +254,14 @@ Evidencia final: `target/driver-frames-test-e6de04bd6ed841e492972e954e98e28d/`, 
 
 También pasaron build/análisis WDK/autoprueba nativa, 19 tests Rust, formato y Clippy. Se repitieron tres ciclos automáticos y la regresión de fallo de encoder/terminación del host durante vídeo WGC, conservada en `target/auto-host-test-326aa1c461324bc392c728737d758db2/`. Al terminar no quedaron monitor virtual, encoder ni lector; VG27AQL5A y ambas GPU seguían con PnP OK. El host habitual y ambos brokers quedaron escuchando, sin dispositivo activo.
 
+## Texturas D3D11 compartidas (7 de septiembre)
+
+La versión 0.1.0.9 (`oem101.inf`) pasó `test-driver-frames.ps1 -Gpu` y la regresión CPU sin ese parámetro. Cada ruta recibió dos tandas de 120 frames con validación estricta del patrón y una terminación del host entre ellas. La nueva conexión creó recursos nuevos y las pruebas conservaron los dispositivos físicos. Resultados, interpretación y rutas exactas de las evidencias en [ADR 0012](adr/0012-shared-d3d11-frame-probe.md#resultados-locales).
+
+Adquisición hasta píxeles CPU en el lector: aproximadamente 17 ms en CPU y 24 ms con texturas compartidas y readback en el auxiliar. La publicación GPU de unos 0,10 ms no mide la disponibilidad final de píxeles ni la latencia de la Deck. El ensayo conserva stdout, patrón GDI y polling; no permite elegir un encoder GPU ni concluir 60 FPS.
+
+También pasan compilación/análisis WDK/catálogo/autoprueba, 19 tests Rust, formato, Clippy, tres ciclos automáticos y regresión WGC de fallo del encoder/terminación del host. Al terminar se cerraron los tres brokers propios; `--verify` devuelve 4 y el monitor físico VG27AQL5A y las GPU NVIDIA/AMD siguen con PnP OK. No se inició una nueva sesión en la Deck. Copia firmada de respaldo 0.1.0.8 en `target/windows-idd-test-v0.1.0.8/`.
+
 ## Repetir en dos equipos
 
 1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.
@@ -275,3 +283,35 @@ Este método incluye captura, codificación, red, decodificación y ambas pantal
 | --- | ---: | ---: | ---: | ---: | --- |
 | Ethernet | 20 | pendiente | pendiente | pendiente | pendiente |
 | Wi-Fi | 20 | pendiente | pendiente | pendiente | pendiente |
+## H.264 experimental desde frames CPU — 8 de septiembre de 2026
+
+`driver/windows-idd/test-auto-host.ps1 -DriverCpu` usa el broker elevado `--frame-broker` previamente abierto. Sin el switch usa el broker WGC `--broker`. El host y FFmpeg se ejecutan sin elevar. El arnés comprueba encoder ausente, dos sesiones de vídeo de unos ocho segundos con reconexión al mismo host, 120 frames decodificados de cada sesión con FFmpeg, H.264 1280 × 800 y frecuencia declarada 60/1 mediante FFprobe, terminación inesperada del host, cierre de procesos y conservación de dispositivos físicos. Guarda el vídeo del escritorio virtual en el directorio de evidencias local.
+
+Aceptación CPU: `target/auto-host-test-3bc9b983eb1d4bceb9d7ebea23697fe5/`. Regresión WGC: `target/auto-host-test-60ffe67270054cf5bef84aa1cd1cfd6d/`. Todos los escenarios pasan, incluidos los contadores explícitos de 120 frames decodificados y los estados PnP finales. Primera ejecución, antes de añadir esos dos controles: CPU `target/auto-host-test-b57c7810bde8432eb6a23c51cb627c30/`; WGC `target/auto-host-test-4906d395a68145768af7c6a25475ef71/`.
+
+Pasan compilación/análisis/catálogo/autoprueba nativos, build Rust, los 19 tests, formato y Clippy. No se reinstaló el driver. Ambos brokers temporales se cerraron al terminar y no queda una sesión activa. La cadencia nominal CPU repite frames; las primeras muestras del encoder rondaron 57 FPS con un escritorio mayoritariamente estático. No equivale a validar 60 superficies nuevas por segundo, movimiento, cursor o latencia visual en la Deck. Véase [ADR 0013](adr/0013-driver-cpu-h264.md).
+## Aceptación visual de la ruta CPU en Steam Deck — 8 de septiembre de 2026
+
+Se abrió el Flatpak ya instalado mediante SSH, unidad temporal `windowdeck-cpu-live.service`, en modo ventana y conectado a `192.168.1.12:48150`. El usuario confirmó: «la calidad y la latencia son aceptables al cerrar la ventana se recupera perfectamente». El cierre fue interactivo; no se terminó el cliente por SSH.
+
+La sesión duró aproximadamente 356 segundos. El cliente registró `h264_stream_stopped` con 636.138.796 bytes y 25.705 chunks. El host detectó `virtual_capture_stopped reason="client_disconnected"` y cerró la sesión con el error de socket 10053. Los últimos registros del encoder indicaban aproximadamente 50,32 FPS efectivos; no confundirlos con los 60 FPS configurados ni interpretar la valoración visual como latencia medida.
+
+Tras el cierre, `--verify` devolvió 4; no quedaban encoder, auxiliar CPU ni instancia Flatpak de WindowDeck. Se compararon los dispositivos PnP con el estado previo: monitor físico, NVIDIA y AMD conservados con estado OK, sin monitor virtual. Host 8012 y broker CPU 10496 permanecieron en reposo; comprobar identidad antes de usar esos PID.
+
+Evidencias: `target/deck-cpu-live-57d03b14186f43d2ab175225cf9b0c34/`, con logs del host y estados de dispositivos antes/después; Deck `/home/deck/Downloads/windowdeck-cpu-live.log`. No hubo reinstalación del driver, cambio de calidad, comparación A/B controlada con WGC ni validación separada del cursor.
+## Apagado de la Deck durante vídeo — 8 de septiembre de 2026
+
+El primer intento de suspensión fue un apagado, según aclaró el usuario. Confirmó recuperación perfecta de ventanas en Windows. El host cerró la sesión por TCP 10054; el observador registró `verify=4` y ausencia de encoder y auxiliar CPU. La Deck volvió a responder por SSH después de arrancar. Esto no valida suspensión/reanudación. Evidencia: `target/deck-suspend-f06ca221eafd4f60b5e1d569643562f2/`; logs del host en `target/deck-cpu-live-57d03b14186f43d2ab175225cf9b0c34/`. Se preparó una repetición separada en `target/deck-suspend-retry-72c33b15279247e6b211f8ae3c95d1ab/`.
+## Suspensión real: limpieza correcta y reconexión ausente — 8 de septiembre de 2026
+
+El journal de `systemd-suspend.service` confirma suspensión de la Deck de 09:22:27 a 09:23:29 CEST, unos 62 segundos. Durante la interrupción, el host registró `encoder_stalled` y cerró la sesión con timeout de socket 10060 a las 07:22:39 UTC. El observador confirmó monitor inactivo (`verify=4`) y ausencia de encoder/auxiliar CPU. Al despertar, el cliente terminó con `Resource temporarily unavailable (os error 11)`; el usuario confirmó que la ventana se cerró sin recuperar la conexión.
+
+La revisión de `receive_h264_test` confirma una sola llamada a `connect`, sin reintentos al terminar la sesión. La reconexión del modo RGB332 no se aplica a H.264. Pasa la limpieza de la sesión en Windows; falla la recuperación automática de vídeo. Pendiente implementar reconexión H.264 que respete el cierre voluntario de la ventana, actualizar el Flatpak y repetir ambas pruebas.
+
+Evidencia: `target/deck-suspend-retry-72c33b15279247e6b211f8ae3c95d1ab/observations.jsonl`; host `target/deck-cpu-live-57d03b14186f43d2ab175225cf9b0c34/host.log`; cliente `/home/deck/Downloads/windowdeck-suspend-retry.log`. Observador detenido al finalizar; host y broker conservados en reposo.
+
+## Reconexión H.264 tras suspensión — 8 de septiembre de 2026
+
+El Flatpak actualizado desde commit `52c4fca` se probó en la Deck durante una suspensión real. El cliente detectó `Resource temporarily unavailable (os error 11)`, mantuvo la ventana abierta y reconectó: `h264_reconnected` a las 07:25:03 UTC, primer paquete de la sesión nueva 448 ms después. El usuario confirmó que la imagen se recuperó, con latencia inicial notable que se estabilizó, y consideró aceptable el resultado.
+
+Tras cerrar la prueba se detuvo la instancia Flatpak y el broker CPU. `--verify` devolvió 4; no quedaron monitor virtual, FFmpeg ni auxiliar. Evidencia: `target/deck-cpu-live-e34b5af439ee4f249f437616939dbdb7/host.log` y `/home/deck/Downloads/windowdeck-reconnect-final.log`. La sesión nueva se negocia después de la suspensión; no se conserva el socket TCP original. Quedan como mejoras la recuperación visual inicial y las pruebas de bloqueo/cambio de usuario.
