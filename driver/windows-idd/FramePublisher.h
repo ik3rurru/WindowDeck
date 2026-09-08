@@ -54,8 +54,7 @@ public:
                 result = device->CreateTexture2D(&desc, nullptr, &item.texture);
                 if (FAILED(result)) { InterlockedExchange(&shared->error, result); return; }
             }
-            gpu->CopyResource(item.texture.Get(), source.Get());
-            gpu->Flush();
+            gpu->CopyResource(item.texture.Get(), source.Get());`r`n            // Map(DO_NOT_WAIT) observes completion without forcing a per-frame immediate-context flush here.
             item.busy = true; item.acquired = acquired; item.presentation = presentation;
             return;
         }
