@@ -79,9 +79,13 @@ fn pattern_phase(pixels: &[u8]) -> Option<usize> {
     })
 }
 
-pub(super) fn run(tool: PathBuf) -> Result<(), AnyError> {
+pub(super) fn run(tool: PathBuf, gpu: bool) -> Result<(), AnyError> {
     let mut child = Command::new(tool)
-        .arg("--frame-source")
+        .arg(if gpu {
+            "--gpu-frame-source"
+        } else {
+            "--frame-source"
+        })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .spawn()?;
@@ -165,6 +169,7 @@ pub(super) fn run(tool: PathBuf) -> Result<(), AnyError> {
         Level::Info,
         "driver_frame_probe_passed",
         &[
+            ("transfer", if gpu { "d3d11" } else { "cpu" }),
             ("frames", &FRAMES.to_string()),
             ("matched_pattern", &matched.to_string()),
             ("unmatched_frames", &format!("{unmatched:?}")),

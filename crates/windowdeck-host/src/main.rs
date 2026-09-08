@@ -53,7 +53,8 @@ fn run() -> Result<(), AnyError> {
         } => run_server(address, monitor, codec),
         Mode::CaptureTest(index) => capture_test(index),
         Mode::EncodeTest(index) => encode_test(index),
-        Mode::DriverFrameTest => driver_frame_test(),
+        Mode::DriverFrameTest => driver_frame_test(false),
+        Mode::GpuFrameTest => driver_frame_test(true),
     }
 }
 
@@ -67,6 +68,7 @@ enum Mode {
     CaptureTest(usize),
     EncodeTest(usize),
     DriverFrameTest,
+    GpuFrameTest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,25 +76,32 @@ enum CaptureTarget {
     Monitor(usize),
     WindowDeck,
     WindowDeckAuto,
+    WindowDeckCpu,
 }
 
 fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
     let mut args = args.into_iter();
     match args.next().as_deref() {
-        Some("--driver-frame-test") => {
+        Some(command @ ("--driver-frame-test" | "--gpu-frame-test")) => {
             if args.next().is_some() {
-                return Err("usa --driver-frame-test sin argumentos");
+                return Err("usa --driver-frame-test o --gpu-frame-test sin argumentos");
             }
-            Ok(Mode::DriverFrameTest)
+            Ok(if command == "--gpu-frame-test" {
+                Mode::GpuFrameTest
+            } else {
+                Mode::DriverFrameTest
+            })
         }
-        Some(command @ ("--virtual-h264" | "--auto-virtual-h264")) => {
+        Some(command @ ("--virtual-h264" | "--auto-virtual-h264" | "--driver-h264")) => {
             let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
             if args.next().is_some() || address.starts_with('-') {
-                return Err("usa --virtual-h264 [DIRECCIÓN] o --auto-virtual-h264 [DIRECCIÓN]");
+                return Err("usa --virtual-h264, --auto-virtual-h264 o --driver-h264 [DIRECCIÓN]");
             }
             Ok(Mode::Serve {
                 address,
-                monitor: Some(if command == "--auto-virtual-h264" {
+                monitor: Some(if command == "--driver-h264" {
+                    CaptureTarget::WindowDeckCpu
+                } else if command == "--auto-virtual-h264" {
                     CaptureTarget::WindowDeckAuto
                 } else {
                     CaptureTarget::WindowDeck
@@ -150,12 +159,12 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
 }
 
 #[cfg(windows)]
-fn driver_frame_test() -> Result<(), AnyError> {
-    capture::probe_driver_frames()
+fn driver_frame_test(gpu: bool) -> Result<(), AnyError> {
+    capture::probe_driver_frames(gpu)
 }
 
 #[cfg(not(windows))]
-fn driver_frame_test() -> Result<(), AnyError> {
+fn driver_frame_test(_gpu: bool) -> Result<(), AnyError> {
     Err("el prototipo del driver requiere Windows".into())
 }
 
@@ -322,6 +331,10 @@ fn capture_stream(
     codec: VideoCodec,
 ) -> Result<(), AnyError> {
     let index = match target {
+        CaptureTarget::WindowDeckCpu if codec == VideoCodec::H264 => {
+            return capture::stream_driver_h264(stream, session_id);
+        }
+        CaptureTarget::WindowDeckCpu => return Err("WindowDeck requiere H.264".into()),
         CaptureTarget::WindowDeck | CaptureTarget::WindowDeckAuto if codec == VideoCodec::H264 => {
             return capture::stream_virtual_h264(stream, session_id);
         }
@@ -365,7 +378,7 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
         CaptureTarget::WindowDeck => {
             capture::virtual_monitor()?;
         }
-        CaptureTarget::WindowDeckAuto => {}
+        CaptureTarget::WindowDeckAuto | CaptureTarget::WindowDeckCpu => {}
     }
     Ok((H264_WIDTH, H264_HEIGHT, capture::ENCODE_FPS as u16))
 }
@@ -426,6 +439,15 @@ mod tests {
     #[test]
     fn mode_accepts_server_address_or_capture_monitor() {
         assert_eq!(
+            parse_mode(["--driver-frame-test".into()]),
+            Ok(Mode::DriverFrameTest)
+        );
+        assert_eq!(
+            parse_mode(["--gpu-frame-test".into()]),
+            Ok(Mode::GpuFrameTest)
+        );
+        assert!(parse_mode(["--gpu-frame-test".into(), "extra".into()]).is_err());
+        assert_eq!(
             parse_mode(Vec::new()),
             Ok(Mode::Serve {
                 address: DEFAULT_ADDRESS.into(),
@@ -464,18 +486,25 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn automatic_display_requires_compatible_negotiation() {
-        for codecs in [0, VideoCodec::Rgb332.capability()] {
+        for (target, codecs) in [
+            (CaptureTarget::WindowDeckAuto, 0),
+            (
+                CaptureTarget::WindowDeckAuto,
+                VideoCodec::Rgb332.capability(),
+            ),
+            (CaptureTarget::WindowDeckCpu, 0),
+            (
+                CaptureTarget::WindowDeckCpu,
+                VideoCodec::Rgb332.capability(),
+            ),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
                 let (socket, _) = listener.accept().unwrap();
-                serve(
-                    socket,
-                    Some(CaptureTarget::WindowDeckAuto),
-                    VideoCodec::H264,
-                )
-                .unwrap_err()
-                .to_string()
+                serve(socket, Some(target), VideoCodec::H264)
+                    .unwrap_err()
+                    .to_string()
             });
             let mut client = TcpStream::connect(address).unwrap();
             client
@@ -509,6 +538,18 @@ mod tests {
 
     #[test]
     fn virtual_mode_is_explicit_and_rejects_extra_arguments() {
+        assert_eq!(
+            parse_mode(["--driver-h264".into()]),
+            Ok(Mode::Serve {
+                address: DEFAULT_ADDRESS.into(),
+                monitor: Some(CaptureTarget::WindowDeckCpu),
+                codec: VideoCodec::H264,
+            })
+        );
+        assert!(parse_mode(["--driver-h264".into(), "--unknown".into()]).is_err());
+        assert!(
+            parse_mode(["--driver-h264".into(), "127.0.0.1:9".into(), "extra".into()]).is_err()
+        );
         assert_eq!(
             parse_mode(["--auto-virtual-h264".into()]),
             Ok(Mode::Serve {
