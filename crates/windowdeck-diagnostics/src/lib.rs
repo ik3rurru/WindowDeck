@@ -1,6 +1,40 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Local monotonic stage timings. Never subtract clocks from different machines.
+#[derive(Default)]
+pub struct Timings {
+    count: u64,
+    total: std::time::Duration,
+    max: std::time::Duration,
+}
+
+impl Timings {
+    pub fn record(&mut self, elapsed: std::time::Duration) {
+        self.count += 1;
+        self.total += elapsed;
+        self.max = self.max.max(elapsed);
+    }
+    pub fn report(&mut self, event: &str) {
+        if self.count == 0 {
+            return;
+        }
+        emit(
+            Level::Info,
+            event,
+            &[
+                ("samples", &self.count.to_string()),
+                (
+                    "mean_us",
+                    &(self.total.as_micros() / u128::from(self.count)).to_string(),
+                ),
+                ("max_us", &self.max.as_micros().to_string()),
+            ],
+        );
+        *self = Self::default();
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Level {
     Info,

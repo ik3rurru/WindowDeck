@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+windowdeck-media = { path = "../windowdeck-media", optional = true }
 windowdeck-diagnostics = { path = "../windowdeck-diagnostics" }
 windowdeck-protocol = { path = "../windowdeck-protocol" }
 
@@ -15,3 +16,6 @@ windows-capture = "2.0.1"
 
 [lints]
 workspace = true
+
+[features]
+native-media = ["dep:windowdeck-media", "windowdeck-media/native"]

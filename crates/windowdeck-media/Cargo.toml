@@ -1,0 +1,20 @@
+[package]
+name = "windowdeck-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+native = []
+
+[build-dependencies]
+cc = "1.4.5"
+pkg-config = "0.3"
+
+[lints.rust]
+# The only Rust FFI boundary. All public operations own their native resources.
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "warn"

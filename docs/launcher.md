@@ -4,13 +4,15 @@ Abrir `WindowDeck.vbs` en la raiz del proyecto o el acceso directo WindowDeck
 del escritorio de Windows. El panel ofrece Iniciar, Detener y Ver registros.
 El icono de la ventana y del acceso directo procede de `assets/WindowDeck.ico`.
 Iniciar solicita UAC solo para el broker; el host conserva permisos normales.
-Se requieren el driver instalado, FFmpeg en PATH y los binarios compilados en
-`target/debug` y `target/windows-idd`. El lanzador no instala el driver ni cambia
-las reglas TCP existentes. El broker configura descubrimiento UDP 5353 para el host en redes privadas locales. Si el puerto 48150 esta ocupado, cerrar la prueba anterior.
+Se requieren el driver instalado y los binarios del paquete, o los compilados en
+`target/release` y `target/windows-idd`. `scripts/build-media.ps1` prepara FFmpeg
+y SDL junto al host. El lanzador no instala el driver. El broker configura sus
+reglas UDP 5353 y TCP 48150 para el ejecutable actual, en redes privadas locales.
+Si el puerto 48150 esta ocupado, cerrar la prueba anterior.
 
-Abrir despues el cliente en la Steam Deck. El panel indica conexion TCP, no
-confirma que el reproductor haya presentado el primer frame. Detener o cerrar
-el panel termina su host y solicita el cierre de su broker, con ocho segundos
+Abrir despues el cliente en la Steam Deck. El panel recibe estados de negociacion
+y sesion del host; no confirma el barrido fisico del primer frame en la Deck.
+Detener o cerrar solicita al host que termine y libere el monitor, con ocho segundos
 para liberar el monitor. Solo administra sus propios procesos. Los registros
 se conservan en `target/launcher-<identificador>/`.
 
@@ -33,3 +35,8 @@ acceso directo en el modo escritorio de la Deck.
 
 Validacion: analisis sintactico PowerShell sin errores. Pendiente comprobar
 interactivamente el ciclo completo Iniciar/conectar/Detener con la Deck.
+
+Version 0.2.0: el panel usa la integracion multimedia si esta compilada. Mantiene
+ambos brokers para aceptar tambien clientes antiguos. `-Legacy` fuerza CPU y
+FFplay. No consulta `Get-NetTCPConnection`; los estados proceden del host.
+Vease [implementacion, pruebas y limites](mejoras-implementadas.md).

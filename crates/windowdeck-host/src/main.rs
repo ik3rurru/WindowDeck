@@ -45,6 +45,42 @@ fn main() {
 }
 
 fn run() -> Result<(), AnyError> {
+    #[cfg(all(windows, feature = "native-media"))]
+    if env::args().nth(1).as_deref() == Some("--gpu-self-test") {
+        windowdeck_media::gpu_self_test(&env::args().nth(2).unwrap_or_else(|| "auto".into()))?;
+        return Ok(());
+    }
+    if env::args().nth(1).as_deref() == Some("--version") {
+        println!(
+            "windowdeck-host {} protocol={} profile={}",
+            env!("CARGO_PKG_VERSION"),
+            windowdeck_protocol::PROTOCOL_VERSION,
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        println!("native_media={}", cfg!(feature = "native-media"));
+        #[cfg(feature = "native-media")]
+        println!("ffmpeg={}", windowdeck_media::version());
+        return Ok(());
+    }
+    emit(
+        Level::Info,
+        "host_build",
+        &[
+            ("version", env!("CARGO_PKG_VERSION")),
+            (
+                "profile",
+                if cfg!(debug_assertions) {
+                    "debug"
+                } else {
+                    "release"
+                },
+            ),
+        ],
+    );
     match parse_mode(env::args().skip(1))? {
         Mode::Serve {
             address,
@@ -77,6 +113,7 @@ enum CaptureTarget {
     WindowDeck,
     WindowDeckAuto,
     WindowDeckCpu,
+    WindowDeckNative,
 }
 
 fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
@@ -92,21 +129,32 @@ fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static s
                 Mode::DriverFrameTest
             })
         }
-        Some(command @ ("--virtual-h264" | "--auto-virtual-h264" | "--driver-h264")) => {
+        Some(
+            command @ ("--virtual-h264"
+            | "--auto-virtual-h264"
+            | "--driver-h264"
+            | "--driver-native-h264"),
+        ) => {
             let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
             if args.next().is_some() || address.starts_with('-') {
                 return Err("usa --virtual-h264, --auto-virtual-h264 o --driver-h264 [DIRECCIÓN]");
             }
             Ok(Mode::Serve {
                 address,
-                monitor: Some(if command == "--driver-h264" {
+                monitor: Some(if command == "--driver-native-h264" {
+                    CaptureTarget::WindowDeckNative
+                } else if command == "--driver-h264" {
                     CaptureTarget::WindowDeckCpu
                 } else if command == "--auto-virtual-h264" {
                     CaptureTarget::WindowDeckAuto
                 } else {
                     CaptureTarget::WindowDeck
                 }),
-                codec: VideoCodec::H264,
+                codec: if command == "--driver-native-h264" {
+                    VideoCodec::H264Frames
+                } else {
+                    VideoCodec::H264
+                },
             })
         }
         Some(command @ ("--capture-test" | "--encode-test")) => {
@@ -193,6 +241,10 @@ fn run_server(
     monitor: Option<CaptureTarget>,
     codec: VideoCodec,
 ) -> Result<(), AnyError> {
+    #[cfg(not(feature = "native-media"))]
+    if monitor == Some(CaptureTarget::WindowDeckNative) {
+        return Err("recompila con --features native-media para usar --driver-native-h264".into());
+    }
     #[cfg(not(windows))]
     if monitor.is_some() {
         return Err("la captura de pantalla solo está disponible en Windows".into());
@@ -200,7 +252,7 @@ fn run_server(
     let listener = TcpListener::bind(&address)?;
     let _announcement = match windowdeck_protocol::discovery::advertise(
         listener.local_addr()?,
-        if codec == VideoCodec::H264 {
+        if codec != VideoCodec::Rgb332 {
             "h264"
         } else {
             "rgb332"
@@ -217,9 +269,24 @@ fn run_server(
         }
     };
     emit(Level::Info, "host_listening", &[("address", &address)]);
+    publish_state("listening");
 
+    listener.set_nonblocking(true)?;
     loop {
-        let (stream, peer) = listener.accept()?;
+        if stop_requested() {
+            publish_state("stopped");
+            return Ok(());
+        }
+        let (stream, peer) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        stream.set_nonblocking(false)?;
+        publish_state("negotiating");
         emit(
             Level::Info,
             "client_connected",
@@ -232,13 +299,14 @@ fn run_server(
                 &[("error", &error.to_string())],
             );
         }
+        publish_state("listening");
     }
 }
 
 fn serve(
     mut stream: TcpStream,
-    monitor: Option<CaptureTarget>,
-    codec: VideoCodec,
+    mut monitor: Option<CaptureTarget>,
+    mut codec: VideoCodec,
 ) -> Result<(), AnyError> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -266,11 +334,22 @@ fn serve(
             max_height,
             max_fps,
             codecs,
-        } if codecs & codec.capability() != 0
+        } if (codecs & codec.capability() != 0
+            || (codec == VideoCodec::H264Frames
+                && codecs & VideoCodec::H264.capability() != 0))
             && width <= max_width
             && height <= max_height
             && fps <= max_fps =>
         {
+            if codec == VideoCodec::H264Frames && codecs & codec.capability() == 0 {
+                codec = VideoCodec::H264;
+                monitor = Some(CaptureTarget::WindowDeckCpu);
+                emit(
+                    Level::Info,
+                    "native_host_fallback",
+                    &[("reason", "legacy_client")],
+                );
+            }
             state = state.apply(ConnectionEvent::Negotiated)?;
         }
         Message::Capabilities { .. } => {
@@ -300,6 +379,7 @@ fn serve(
     )?;
     write_message(&mut stream, &Message::Start)?;
     state.apply(ConnectionEvent::Started)?;
+    publish_state("streaming");
 
     if let Some(index) = monitor {
         return capture_stream(stream, index, session_id, codec);
@@ -308,6 +388,10 @@ fn serve(
     let started = Instant::now();
     let mut number = 0_u64;
     loop {
+        if stop_requested() {
+            write_message(&mut stream, &Message::Stop)?;
+            return Ok(());
+        }
         let frame_started = Instant::now();
         let captured_micros = started.elapsed().as_micros() as u64;
         write_message(
@@ -349,6 +433,7 @@ fn capture_stream(
     codec: VideoCodec,
 ) -> Result<(), AnyError> {
     let index = match target {
+        CaptureTarget::WindowDeckNative => return capture::stream_native_h264(stream, session_id),
         CaptureTarget::WindowDeckCpu if codec == VideoCodec::H264 => {
             return capture::stream_driver_h264(stream, session_id);
         }
@@ -364,6 +449,7 @@ fn capture_stream(
     match codec {
         VideoCodec::Rgb332 => capture::stream(stream, index, session_id),
         VideoCodec::H264 => capture::stream_h264(stream, index, session_id),
+        VideoCodec::H264Frames => Err("H.264 integrado requiere --driver-native-h264".into()),
     }
 }
 
@@ -383,7 +469,9 @@ fn stream_format(
 ) -> Result<(u16, u16, u16), AnyError> {
     match codec {
         VideoCodec::Rgb332 => Ok((WIDTH, HEIGHT, FPS)),
-        VideoCodec::H264 => h264_format(monitor.ok_or("H.264 requiere un monitor")?),
+        VideoCodec::H264 | VideoCodec::H264Frames => {
+            h264_format(monitor.ok_or("H.264 requiere un monitor")?)
+        }
     }
 }
 
@@ -396,7 +484,9 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
         CaptureTarget::WindowDeck => {
             capture::virtual_monitor()?;
         }
-        CaptureTarget::WindowDeckAuto | CaptureTarget::WindowDeckCpu => {}
+        CaptureTarget::WindowDeckAuto
+        | CaptureTarget::WindowDeckCpu
+        | CaptureTarget::WindowDeckNative => {}
     }
     Ok((H264_WIDTH, H264_HEIGHT, capture::ENCODE_FPS as u16))
 }
@@ -404,6 +494,18 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
 #[cfg(not(windows))]
 fn h264_format(_target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
     Err("la codificación H.264 solo está disponible en Windows".into())
+}
+
+fn publish_state(state: &str) {
+    use std::io::Write;
+    let mut output = std::io::stdout().lock();
+    let _ = writeln!(output, "windowdeck_state={state}");
+    let _ = output.flush();
+}
+
+fn stop_requested() -> bool {
+    std::env::var_os("WINDOWDECK_STOP_FILE")
+        .is_some_and(|path| std::path::Path::new(&path).is_file())
 }
 
 fn pattern(frame: u64, captured_micros: u64) -> Vec<u8> {
@@ -515,6 +617,10 @@ mod tests {
                 CaptureTarget::WindowDeckCpu,
                 VideoCodec::Rgb332.capability(),
             ),
+            (
+                CaptureTarget::WindowDeckNative,
+                VideoCodec::Rgb332.capability(),
+            ),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -556,6 +662,14 @@ mod tests {
 
     #[test]
     fn virtual_mode_is_explicit_and_rejects_extra_arguments() {
+        assert_eq!(
+            parse_mode(["--driver-native-h264".into()]),
+            Ok(Mode::Serve {
+                address: DEFAULT_ADDRESS.into(),
+                monitor: Some(CaptureTarget::WindowDeckNative),
+                codec: VideoCodec::H264Frames,
+            })
+        );
         assert_eq!(
             parse_mode(["--driver-h264".into()]),
             Ok(Mode::Serve {

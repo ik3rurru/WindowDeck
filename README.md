@@ -1,8 +1,15 @@
 # WindowDeck
 
+**Actualización 0.2.0:** descubrimiento continuo, lanzador release con estados del
+host, colas limitadas e integración opcional FFmpeg/SDL con codificación GPU y
+cliente propio. Se conserva la compatibilidad con clientes MPEG-TS anteriores.
+Consultar [las mejoras implementadas y su validación](docs/mejoras-implementadas.md)
+para compilar y ejecutar la versión actual. Las secciones siguientes documentan
+también las rutas anteriores del prototipo.
+
 WindowDeck busca convertir la pantalla de una Steam Deck en un monitor secundario real de Windows 11 mediante la red local.
 
-El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 60 FPS, pero todavía no usa codificación por hardware. El [prototipo de monitor virtual](driver/windows-idd/README.md) activa un escritorio extendido de 1280 × 800 a 60 Hz y supera diez ciclos de activación/retirada. La nueva ruta `--virtual-h264` captura ese escritorio mediante Windows Graphics Capture y ya permite usar la Deck como pantalla extendida, confirmado visualmente por el usuario. La latencia es perceptible y todavía no está medida. La opción `--auto-virtual-h264` vincula la activación y retirada del monitor a la sesión, con un controlador local iniciado previamente como administrador. El HDMI del dock de Steam Deck es una salida, no una entrada.
+El proyecto está en fase de prototipo: valida el protocolo, una conexión TCP manual y la captura de una pantalla real de Windows. También puede transmitir y reproducir H.264 continuo a 1280 × 800 y 60 FPS, y ahora dispone de la ruta hardware descrita en las mejoras 0.2.0. El [prototipo de monitor virtual](driver/windows-idd/README.md) activa un escritorio extendido de 1280 × 800 a 60 Hz y supera diez ciclos de activación/retirada. La nueva ruta `--virtual-h264` captura ese escritorio mediante Windows Graphics Capture y ya permite usar la Deck como pantalla extendida, confirmado visualmente por el usuario. La latencia es perceptible y todavía no está medida. La opción `--auto-virtual-h264` vincula la activación y retirada del monitor a la sesión, con un controlador local iniciado previamente como administrador. El HDMI del dock de Steam Deck es una salida, no una entrada.
 
 Para retomar el desarrollo, consultar el [punto de continuación de la última sesión](docs/continuation.md).
 

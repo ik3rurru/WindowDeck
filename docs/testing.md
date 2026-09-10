@@ -342,3 +342,48 @@ Se limitó la cola de entrada de FFmpeg a dos frames y se añadieron parámetros
 El usuario acepta la transmisión durante el uso normal y considera esperables los FPS bajos al arrancar los scripts y establecer comunicación. Se pausa la optimización: no continuar automáticamente con encoder GPU ni más pruebas de rendimiento. Se conserva CPU H.264/libx264 con temporización QPC, temporizador de alta resolución y métricas por intervalo. Esta aceptación no certifica 60 FPS presentados de forma continua.
 
 Detalle de cambios, evidencia, correcciones de interpretaciones anteriores y validación: [revisión de cadencia](fps-pacing-review.md). La última sesión quedó activa para el usuario en `target/deck-cpu-live-611371701eef48a89fb6518ee6b2f95a/`; verificar identidad de procesos antes de usar PID guardados. El Flatpak b60158e sirve para estos cambios del host. Compilar una DLL no actualiza el driver instalado.
+
+## Corrección de desconexiones con el cliente instalado — 10 de septiembre de 2026
+
+El host 0.2.0 negociaba correctamente el respaldo CPU/MPEG-TS con el Flatpak 0.1.0
+instalado en la Deck (commit Flatpak `a78bd7428e8b9d8be77f387a329ceb610a57e019afaa4b1d7b65d4073199e681`).
+Sin embargo, la nueva política de 250 ms se aplicaba también a la escritura TCP,
+la espera del productor y la antigüedad de los chunks de esa ruta. Durante el
+arranque se superaba ese límite: el host cortaba el envío y el cliente recibía
+`failed to fill whole buffer`, reconectando repetidamente. Se reprodujeron
+14 pérdidas de conexión antes de detener la prueba.
+
+La corrección conserva la cola de dos chunks y el límite histórico de diez
+segundos para los bloqueos de la ruta MPEG-TS. No se descartan bytes H.264. El
+límite de 250 ms de las unidades de acceso de la ruta nativa sigue separado.
+El cambio está en el host; no se actualizó el Flatpak ni se reinstaló el driver.
+
+Verificación con la Deck real, conectada por SSH a `192.168.1.18`:
+
+- Primera apertura mediante descubrimiento automático: 207 segundos, 434.973.720
+  bytes recibidos y ninguna pérdida de conexión. Se pausó únicamente el proceso
+  del cliente durante dos segundos con SIGSTOP/SIGCONT y continuó la misma sesión.
+  Hubo escrituras TCP de hasta 963.802 µs, superiores al antiguo límite.
+- Cierre de esa instancia mediante `flatpak kill`: `--verify` devolvió 4; se
+  retiró el monitor y terminaron FFmpeg y el auxiliar de captura. Esto comprueba
+  el cierre de proceso, no sustituye una aceptación visual mediante la X.
+- Segunda apertura automática en el mismo host: unos 54 segundos y 105.575.724
+  bytes recibidos, sin reconexiones inesperadas. La parada solicitada al host
+  produjo `h264_session_stopped` y `h264_stream_stopped` en la Deck. El host
+  registra la terminación forzada de su FFmpeg con código 1 durante esa parada
+  deliberada; el cliente recibió Stop y terminó normalmente.
+- Estado final: sin monitor virtual, host, brokers, FFmpeg ni cliente de prueba.
+  Los procesos de otras aplicaciones de la Deck se conservaron.
+
+Pasan 29 pruebas Rust (una prueba de multicast queda excluida), Clippy con todas
+las funciones, formato, compilación release y autoprueba multimedia. Las nuevas
+regresiones fuerzan una pausa de 800 ms en el consumidor y verifican que se
+conservan todos los bytes y el orden de los nueve chunks, y que los datos de
+una sesión bloqueada más de diez segundos siguen rechazándose.
+
+Evidencias locales: `target/reconnect-before-0889999b9d5c40d19daed078aa52c243/`
+y `target/reconnect-after-b84b6f0c0dd64417a03708e74efeee1b/`, incluidos los registros
+copiados de la Deck. SHA256 del host corregido:
+`DA362C48232621AD9D75DBF305FFF68EDFC08FBBA2100B210CAA855A51C8513D`.
+Esta prueba valida la compatibilidad CPU con el cliente instalado; no acredita
+la nueva ruta multimedia nativa en la Deck ni mide la latencia visual.

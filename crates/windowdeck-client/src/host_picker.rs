@@ -1,16 +1,17 @@
 use super::*;
 use font8x8::UnicodeFonts;
-use windowdeck_protocol::discovery::Host;
+use windowdeck_protocol::discovery::{Browser, Host};
 use winit::event::{MouseButton, TouchPhase};
 
-pub fn choose(hosts: &[Host]) -> Result<Option<usize>, Box<dyn Error>> {
+pub fn choose(browser: &mut Browser) -> Result<Option<Host>, Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
     let mut picker = Picker {
         context,
         surface: None,
         window: None,
-        hosts,
+        browser,
+        hosts: Vec::new(),
         selected: None,
         cursor_y: 0.0,
     };
@@ -21,15 +22,16 @@ struct Picker<'a> {
     context: Context<OwnedDisplayHandle>,
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     window: Option<Rc<Window>>,
-    hosts: &'a [Host],
-    selected: Option<usize>,
+    browser: &'a mut Browser,
+    hosts: Vec<Host>,
+    selected: Option<Host>,
     cursor_y: f64,
 }
 impl Picker<'_> {
     fn select(&mut self, y: f64, event_loop: &ActiveEventLoop) {
         let index = ((y - 80.0) / 48.0).floor() as isize;
         if y >= 80.0 && index >= 0 && (index as usize) < self.hosts.len() {
-            self.selected = Some(index as usize);
+            self.selected = Some(self.hosts[index as usize].clone());
             event_loop.exit();
         }
     }
@@ -74,8 +76,8 @@ impl Picker<'_> {
             }
         };
         if self.hosts.is_empty() {
-            text("No se encontro ningun PC.", 24);
-            text("Pulsa Iniciar en Windows y vuelve a abrir.", 64);
+            text("Buscando equipos en la red...", 24);
+            text("Pulsa Iniciar en Windows.", 64);
             text("Comprueba que comparten la misma red.", 104);
         } else {
             text("Elige el PC para conectar (toca su nombre)", 24);
@@ -88,6 +90,23 @@ impl Picker<'_> {
     }
 }
 impl ApplicationHandler for Picker<'_> {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let hosts = self.browser.snapshot();
+        if hosts.len() == 1 && self.hosts.is_empty() {
+            self.selected = hosts.into_iter().next();
+            event_loop.exit();
+            return;
+        }
+        if self.hosts != hosts {
+            self.hosts = hosts;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(50),
+        ));
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -130,7 +149,7 @@ impl ApplicationHandler for Picker<'_> {
                     && n > 0
                     && n <= self.hosts.len()
                 {
-                    self.selected = Some(n - 1);
+                    self.selected = Some(self.hosts[n - 1].clone());
                     event_loop.exit();
                 }
             }

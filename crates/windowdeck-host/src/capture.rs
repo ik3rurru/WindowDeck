@@ -28,6 +28,10 @@ use windows_capture::settings::{
 pub(super) const ENCODE_FPS: u32 = 60;
 const ENCODE_BITRATE: u32 = 16_000_000;
 const ENCODE_FRAMES: u64 = 60;
+// MPEG-TS/ffplay can pause while probing, opening the renderer or recovering Wi-Fi.
+// Its arbitrary byte chunks cannot be dropped or restarted at the next frame.
+// Keep the queue small, but retain the legacy transport's ten-second stall budget.
+const LEGACY_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) fn probe_driver_frames(gpu: bool) -> Result<(), AnyError> {
     driver_frames::run(display_tool()?, gpu)
@@ -227,6 +231,47 @@ impl DisplayLease {
         Self::start(Command::new(display_tool()?).arg("--lease"))
     }
 
+    #[cfg(feature = "native-media")]
+    fn acquire_gpu() -> Result<(Self, String), AnyError> {
+        let mut lease = Self {
+            child: Command::new(display_tool()?)
+                .arg("--gpu-lease")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?,
+        };
+        let output = lease
+            .child
+            .stdout
+            .take()
+            .ok_or("falta la salida de --gpu-lease")?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        let reader = thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(output).read_line(&mut line).map(|_| line);
+            let _ = tx.send(result);
+        });
+        let response = rx.recv_timeout(Duration::from_secs(9));
+        if !matches!(&response, Ok(Ok(line)) if line.starts_with("READY Global\\WindowDeck.Frames."))
+        {
+            let _ = lease.child.kill();
+            let _ = lease.child.wait();
+            let _ = reader.join();
+            return Err("no se pudo abrir la ruta GPU; inicia --gpu-frame-broker y comprueba el driver instalado".into());
+        }
+        reader
+            .join()
+            .map_err(|_| "falló el lector de la concesión GPU")?;
+        let line = response??;
+        Ok((
+            lease,
+            line.trim()
+                .strip_prefix("READY ")
+                .ok_or("respuesta GPU inválida")?
+                .into(),
+        ))
+    }
+
     fn start(command: &mut Command) -> Result<Self, AnyError> {
         let mut lease = Self {
             child: command
@@ -389,6 +434,77 @@ pub fn stream_driver_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyE
     )
 }
 
+#[cfg(not(feature = "native-media"))]
+pub fn stream_native_h264(_stream: TcpStream, _session_id: u64) -> Result<(), AnyError> {
+    Err("la integración multimedia no está compilada".into())
+}
+
+#[cfg(feature = "native-media")]
+pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+    use windowdeck_diagnostics::Timings;
+    use windowdeck_protocol::video::{AccessUnit, fragments};
+    let (_lease, mapping) = DisplayLease::acquire_gpu()?;
+    let codec = std::env::var("WINDOWDECK_H264_ENCODER").unwrap_or_else(|_| "auto".into());
+    let mut encoder = windowdeck_media::Encoder::new(&mapping, &codec)?;
+    stream.set_read_timeout(Some(Duration::from_millis(1)))?;
+    stream.set_write_timeout(Some(windowdeck_protocol::queue::MAX_AGE))?;
+    let mut number = 0;
+    let mut send = Timings::default();
+    let mut report = Instant::now();
+    let mut progress = Instant::now();
+    let mut check_peer = Instant::now();
+    loop {
+        if check_peer.elapsed() >= Duration::from_millis(100) {
+            if super::stop_requested() {
+                write_message(&mut stream, &Message::Stop)?;
+                return Ok(());
+            }
+            match stream.peek(&mut [0]) {
+                Ok(0) => return Ok(()),
+                Ok(_) => return Err("mensaje de control inesperado durante vídeo".into()),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(e) => return Err(e.into()),
+            }
+            check_peer = Instant::now();
+        }
+        let Some(packet) = encoder.next_packet()? else {
+            if progress.elapsed() > Duration::from_secs(8) {
+                return Err("el encoder integrado no produce fotogramas".into());
+            }
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        };
+        let started = Instant::now();
+        let unit = AccessUnit {
+            number,
+            captured_micros: packet.captured_micros,
+            keyframe: packet.keyframe,
+            payload: packet.bytes,
+        };
+        for message in fragments(session_id, unit)? {
+            if started.elapsed() >= windowdeck_protocol::queue::MAX_AGE {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "encoded frame expired during send",
+                )
+                .into());
+            }
+            write_message(&mut stream, &message)?;
+        }
+        send.record(started.elapsed());
+        progress = Instant::now();
+        number += 1;
+        if report.elapsed() >= Duration::from_secs(1) {
+            send.report("native_send_metrics");
+            report = Instant::now();
+        }
+    }
+}
+
 // Own the encoder so all error paths reap it. The virtual route also watches removal,
 // client closure and stalled output; a capture must never fall back to the physical screen.
 struct EncoderProcess {
@@ -448,7 +564,7 @@ fn stream_h264_input(
         }
     };
     let peer = stream.try_clone()?;
-    // Only the watchdog reads after negotiation; the existing write timeout is preserved.
+    // Only the watchdog reads after negotiation.
     peer.set_read_timeout(Some(Duration::from_millis(200)))?;
     let filter = format!(
         "hwdownload,format=bgra,scale={}:{}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
@@ -552,7 +668,7 @@ fn stream_h264_input(
             )
         })?;
     let last_output = Arc::new(Mutex::new(Instant::now()));
-    let mut output = EncoderOutput {
+    let output = EncoderOutput {
         pipe: ffmpeg.stdout.take().ok_or("ffmpeg no abrió su salida")?,
         last_output: Arc::clone(&last_output),
     };
@@ -584,14 +700,17 @@ fn stream_h264_input(
                 let active = virtual_device_name().is_ok_and(|name| name == expected);
                 let stalled = last_output
                     .lock()
-                    .map_or(true, |last| last.elapsed() > Duration::from_secs(10));
-                if disconnected || !active || stalled {
+                    .map_or(true, |last| last.elapsed() > LEGACY_STALL_TIMEOUT);
+                let stopped = super::stop_requested();
+                if disconnected || !active || stalled || stopped {
                     emit(
                         Level::Info,
                         "virtual_capture_stopped",
                         &[(
                             "reason",
-                            if disconnected {
+                            if stopped {
+                                "user_stopped"
+                            } else if disconnected {
                                 "client_disconnected"
                             } else if !active {
                                 "monitor_removed_or_changed"
@@ -621,7 +740,10 @@ fn stream_h264_input(
         ],
     );
 
-    let result = send_h264_stream(&mut output, stream, session_id);
+    stream.set_write_timeout(Some(LEGACY_STALL_TIMEOUT))?;
+    let (queued, receiver) = windowdeck_protocol::queue::channel();
+    let reader = thread::spawn(move || read_encoded_output(output, queued));
+    let result = send_h264_stream(EncodedQueue::new(receiver), stream, session_id);
     let status = {
         let mut child = encoder
             .child
@@ -633,7 +755,11 @@ fn stream_h264_input(
     diagnostics
         .join()
         .map_err(|_| "el lector de métricas de ffmpeg terminó inesperadamente")??;
+    let read_result = reader
+        .join()
+        .map_err(|_| "el lector del encoder terminó inesperadamente")?;
     let (bytes, chunks) = result?;
+    read_result?;
     if !status.success() {
         return Err(format!("ffmpeg terminó con {status}").into());
     }
@@ -646,6 +772,70 @@ fn stream_h264_input(
         ],
     );
     Ok(())
+}
+
+fn read_encoded_output(
+    mut output: impl Read,
+    queued: mpsc::SyncSender<windowdeck_protocol::queue::Queued<Vec<u8>>>,
+) -> io::Result<()> {
+    let mut timings = windowdeck_diagnostics::Timings::default();
+    let mut report = Instant::now();
+    loop {
+        let mut bytes = vec![0; MAX_VIDEO_PAYLOAD];
+        let started = Instant::now();
+        let count = output.read(&mut bytes)?;
+        timings.record(started.elapsed());
+        bytes.truncate(count);
+        windowdeck_protocol::queue::send_with_timeout(&queued, bytes, LEGACY_STALL_TIMEOUT)?;
+        if count == 0 {
+            return Ok(());
+        }
+        if report.elapsed() >= Duration::from_secs(1) {
+            timings.report("h264_encoder_read_metrics");
+            report = Instant::now();
+        }
+    }
+}
+
+struct EncodedQueue {
+    receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>,
+    pending: io::Cursor<Vec<u8>>,
+    ended: bool,
+}
+
+impl EncodedQueue {
+    fn new(receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>) -> Self {
+        Self {
+            receiver,
+            pending: io::Cursor::new(Vec::new()),
+            ended: false,
+        }
+    }
+}
+
+impl Read for EncodedQueue {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if bytes.is_empty() || self.ended {
+            return Ok(0);
+        }
+        let count = self.pending.read(bytes)?;
+        if count != 0 {
+            return Ok(count);
+        }
+        let item = self
+            .receiver
+            .recv_timeout(LEGACY_STALL_TIMEOUT)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "encoder stopped or encoded queue expired",
+                )
+            })?;
+        let item = item.into_fresh_within(LEGACY_STALL_TIMEOUT)?;
+        self.ended = item.is_empty();
+        self.pending = io::Cursor::new(item);
+        self.pending.read(bytes)
+    }
 }
 
 pub fn size(index: usize) -> Result<(u16, u16), AnyError> {
@@ -663,24 +853,28 @@ fn send_h264_stream(
     let mut bytes = 0_u64;
     let mut chunk = 0_u64;
     let mut last_report = Instant::now();
+    let mut send_times = windowdeck_diagnostics::Timings::default();
     loop {
         let read = input.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        // ponytail: this probe sequences transport chunks; parse H.264 access units when recovery needs exact keyframes.
+        // Legacy MPEG-TS chunks have no capture timestamp. Zero explicitly means
+        // unavailable; only H264Frames carries the driver's actual QPC timestamp.
+        let send_started = Instant::now();
         write_message(
             &mut stream,
             &Message::VideoChunk {
                 session_id,
                 frame_number: chunk,
-                captured_micros: started.elapsed().as_micros() as u64,
+                captured_micros: 0,
                 fragment_index: 0,
                 fragment_count: 1,
                 keyframe: chunk == 0,
                 payload: buffer[..read].to_vec(),
             },
         )?;
+        send_times.record(send_started.elapsed());
         bytes += read as u64;
         chunk += 1;
         if chunk == 1 {
@@ -692,6 +886,7 @@ fn send_h264_stream(
         }
         if last_report.elapsed() >= Duration::from_secs(1) {
             emit_stream_metrics("h264_send_metrics", started, bytes, chunk);
+            send_times.report("h264_tcp_write_metrics");
             last_report = Instant::now();
         }
     }
@@ -931,6 +1126,79 @@ mod tests {
         );
         assert!(output.iter().all(|pixel| *pixel == 0xe0));
         assert!(downscale_bgra(&[], 1, 1, &mut output).is_err());
+    }
+
+    #[test]
+    fn legacy_h264_preserves_all_bytes_after_a_short_consumer_stall() {
+        struct PausedWriter {
+            bytes: Vec<u8>,
+            paused: bool,
+        }
+        impl io::Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if !self.paused {
+                    self.paused = true;
+                    thread::sleep(Duration::from_millis(800));
+                }
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        // More than two chunks fills the actual producer queue during the pause.
+        let input: Vec<_> = (0..MAX_VIDEO_PAYLOAD * 8 + 17)
+            .map(|offset| (offset % 251) as u8)
+            .collect();
+        let expected = input.clone();
+        let (sender, receiver) = windowdeck_protocol::queue::channel();
+        let producer = thread::spawn(move || read_encoded_output(input.as_slice(), sender));
+        let mut output = PausedWriter {
+            bytes: Vec::new(),
+            paused: false,
+        };
+        let result = send_h264_stream(EncodedQueue::new(receiver), &mut output, 42);
+        producer.join().unwrap().unwrap();
+        assert_eq!(result.unwrap(), (expected.len() as u64, 9));
+
+        let mut wire = output.bytes.as_slice();
+        let mut received = Vec::new();
+        for number in 0..9 {
+            let Message::VideoChunk {
+                session_id,
+                frame_number,
+                payload,
+                ..
+            } = read_message(&mut wire).unwrap()
+            else {
+                panic!("missing video chunk after the pause");
+            };
+            assert_eq!((session_id, frame_number), (42, number));
+            received.extend_from_slice(&payload);
+        }
+        assert_eq!(read_message(&mut wire).unwrap(), Message::Stop);
+        assert_eq!(received, expected);
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn legacy_h264_still_rejects_a_hung_consumer() {
+        let (sender, receiver) = windowdeck_protocol::queue::channel();
+        sender
+            .send(windowdeck_protocol::queue::Queued {
+                produced: Instant::now() - LEGACY_STALL_TIMEOUT - Duration::from_secs(1),
+                value: vec![1, 2, 3],
+            })
+            .unwrap();
+        assert_eq!(
+            EncodedQueue::new(receiver)
+                .read(&mut [0; 8])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
     }
 
     #[test]

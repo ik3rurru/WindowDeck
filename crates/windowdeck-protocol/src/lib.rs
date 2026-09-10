@@ -11,6 +11,8 @@ pub const MAX_VIDEO_PAYLOAD: usize = MAX_MESSAGE_SIZE - VIDEO_CHUNK_OVERHEAD;
 pub enum VideoCodec {
     Rgb332 = 1,
     H264 = 2,
+    /// Annex-B access units with real capture timestamps and fragment boundaries.
+    H264Frames = 3,
 }
 
 impl VideoCodec {
@@ -341,6 +343,7 @@ fn take_codec(input: &mut Cursor<&[u8]>) -> Result<VideoCodec, ProtocolError> {
     match take_u8(input)? {
         1 => Ok(VideoCodec::Rgb332),
         2 => Ok(VideoCodec::H264),
+        3 => Ok(VideoCodec::H264Frames),
         _ => Err(ProtocolError::Invalid("unknown video codec")),
     }
 }
@@ -512,3 +515,5 @@ mod tests {
     }
 }
 pub mod discovery;
+pub mod queue;
+pub mod video;

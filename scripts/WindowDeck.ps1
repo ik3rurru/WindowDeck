@@ -1,26 +1,45 @@
-param([switch]$Broker, [string]$Session, [int]$OwnerId)
+param([switch]$Broker, [string]$Session, [int]$OwnerId, [switch]$Native, [switch]$Legacy)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$display = Join-Path $root 'target/windows-idd/windowdeck-display.exe'
+$display = Join-Path $root 'bin/windowdeck-display.exe'
+if (!(Test-Path -LiteralPath $display)) { $display = Join-Path $root 'target/windows-idd/windowdeck-display.exe' }
+$hostBinary = Join-Path $root 'bin/windowdeck-host.exe'
+if (!(Test-Path -LiteralPath $hostBinary)) { $hostBinary = Join-Path $root 'target/release/windowdeck-host.exe' }
+$env:Path = (Split-Path $hostBinary -Parent) + ';' + $env:Path
 if ($Broker) {
     $child = $null
+    $compatibilityChild = $null
     try {
-        $hostBinary = Join-Path $root 'target/debug/windowdeck-host.exe'
-        if (!(Get-NetFirewallRule -Name 'WindowDeck-mDNS' -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -Name 'WindowDeck-mDNS' -DisplayName 'WindowDeck discovery (private LAN)' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 5353 -Program $hostBinary -Profile Private -RemoteAddress LocalSubnet | Out-Null
+        foreach ($rule in @(@{ Name = 'WindowDeck-mDNS'; Protocol = 'UDP'; Port = 5353 }, @{ Name = 'WindowDeck-Video'; Protocol = 'TCP'; Port = 48150 })) {
+            $existing = Get-NetFirewallRule -Name $rule.Name -ErrorAction SilentlyContinue
+            if ($existing) {
+                $existing | Get-NetFirewallApplicationFilter | Set-NetFirewallApplicationFilter -Program $hostBinary | Out-Null
+            } else {
+                New-NetFirewallRule -Name $rule.Name -DisplayName ($rule.Name + ' (private LAN)') -Direction Inbound -Action Allow -Protocol $rule.Protocol -LocalPort $rule.Port -Program $hostBinary -Profile Private -RemoteAddress LocalSubnet | Out-Null
+            }
         }
         $owner = Get-Process -Id $OwnerId
         $null = $owner.Handle
-        $child = Start-Process $display -ArgumentList '--frame-broker' -WindowStyle Hidden -PassThru -RedirectStandardOutput "$Session/broker.log" -RedirectStandardError "$Session/broker.err"
+        $brokerMode = if ($Native) { '--gpu-frame-broker' } else { '--frame-broker' }
+        $child = Start-Process $display -ArgumentList $brokerMode -WindowStyle Hidden -PassThru -RedirectStandardOutput "$Session/broker.log" -RedirectStandardError "$Session/broker.err"
         $null = $child.Handle
+        if ($Native) {
+            $compatibilityChild = Start-Process $display -ArgumentList '--frame-broker' -WindowStyle Hidden -PassThru -RedirectStandardOutput "$Session/cpu-broker.log" -RedirectStandardError "$Session/cpu-broker.err"
+            $null = $compatibilityChild.Handle
+        }
         Start-Sleep -Milliseconds 500
         if ($child.HasExited) { throw 'No se pudo iniciar el broker; consulta broker.err.' }
+        if ($compatibilityChild -and $compatibilityChild.HasExited) { throw 'No se pudo iniciar el respaldo CPU; consulta cpu-broker.err.' }
         Set-Content "$Session/ready" 'ready'
-        while (!$owner.HasExited -and !$child.HasExited -and !(Test-Path "$Session/stop")) { Start-Sleep -Milliseconds 250 }
+        while (!$owner.HasExited -and !$child.HasExited -and (!$compatibilityChild -or !$compatibilityChild.HasExited) -and !(Test-Path "$Session/stop")) { Start-Sleep -Milliseconds 250 }
         # Allow the host to release the display lease before stopping the broker.
         Start-Sleep -Seconds 8
     } catch { $_ | Out-String | Set-Content "$Session/error" }
-    finally { if ($child -and !$child.HasExited) { $child.Kill(); $child.WaitForExit() } }
+    finally {
+        foreach ($process in @($child, $compatibilityChild)) {
+            if ($process -and !$process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        }
+    }
     exit
 }
 Add-Type -AssemblyName System.Windows.Forms
@@ -31,6 +50,8 @@ $script:hostChild = $null
 $script:manager = $null
 $script:sessionPath = $null
 $script:starting = $false
+$script:stoppingSince = $null
+$script:lastFailure = $null
 $script:startTime = Get-Date
 $form = New-Object Windows.Forms.Form
 $form.Text = 'WindowDeck'
@@ -55,7 +76,7 @@ $address.Text = 'Direccion del PC: ' + (($ips | ForEach-Object { "${_}:48150" })
 $form.Controls.AddRange(@($status,$start,$stop,$logs,$address))
 function Stop-Session {
     $script:starting = $false
-    if ($script:hostChild -and !$script:hostChild.HasExited) { $script:hostChild.Kill(); $script:hostChild.WaitForExit() }
+    if (!$script:stoppingSince) { $script:stoppingSince = Get-Date }
     if ($script:sessionPath) { Set-Content "$script:sessionPath/stop" 'stop' }
     $stop.Enabled = $false
     $status.Text = 'Deteniendo y recuperando las ventanas...'
@@ -64,20 +85,26 @@ $start.Add_Click({
     try {
         $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
         if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Abre WindowDeck sin ejecutar como administrador. Solo el broker necesita elevacion.' }
-        $script:hostExe = Join-Path $root 'target/debug/windowdeck-host.exe'
+        $script:hostExe = $hostBinary
         foreach ($file in @($script:hostExe,$display)) { if (!(Test-Path $file)) { throw "Falta $file. Compila el proyecto antes de iniciar." } }
-        if (!(Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw 'FFmpeg no esta en PATH. Instala FFmpeg y vuelve a abrir WindowDeck.' }
-        if (Get-NetTCPConnection -LocalPort 48150 -State Listen -ErrorAction SilentlyContinue) { throw 'El puerto 48150 esta ocupado. Cierra la prueba anterior antes de iniciar.' }
+        $version = & $script:hostExe --version
+        if ($LASTEXITCODE) { throw 'No se pudo abrir el host. Comprueba que sus DLL estan junto al ejecutable.' }
+        $script:useNative = !$Legacy -and ($version -contains 'native_media=true')
+        if (!$script:useNative -and !(Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw 'FFmpeg no esta en PATH. Usa el paquete completo de WindowDeck.' }
         $script:sessionPath = Join-Path $root ('target/launcher-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory $script:sessionPath | Out-Null
+        $script:stoppingSince = $null
+        $script:lastFailure = $null
+        $version | Set-Content -LiteralPath "$script:sessionPath/host-version.txt"
         $args = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Broker -Session "{1}" -OwnerId {2}' -f $PSCommandPath,$script:sessionPath,$PID
+        if ($script:useNative) { $args += ' -Native' }
         $script:manager = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList $args -PassThru
         $null = $script:manager.Handle
         $script:startTime = Get-Date
         $script:starting = $true
         $start.Enabled = $false; $stop.Enabled = $true
         $status.Text = 'Iniciando...'
-    } catch { $status.Text = $_.Exception.Message }
+    } catch { $script:lastFailure = $_.Exception.Message; $status.Text = $script:lastFailure }
 })
 $stop.Add_Click({ Stop-Session })
 $logs.Add_Click({ if ($script:sessionPath) { Start-Process explorer.exe -ArgumentList ('"' + $script:sessionPath + '"') } })
@@ -90,19 +117,37 @@ $timer.Add_Tick({
             if ($script:manager.HasExited) { throw 'El broker se ha cerrado.' }
             if (Test-Path "$script:sessionPath/ready") {
                 $env:WINDOWDECK_DISPLAY_EXE = $display
-                $env:WINDOWDECK_H264_ENCODER = 'libx264'
-                $script:hostChild = Start-Process $script:hostExe -ArgumentList '--driver-h264 0.0.0.0:48150' -WindowStyle Hidden -PassThru -RedirectStandardError "$script:sessionPath/host.log" -RedirectStandardOutput "$script:sessionPath/host.out"
+                $env:WINDOWDECK_STOP_FILE = "$script:sessionPath/stop"
+                $hostMode = if ($script:useNative) { '--driver-native-h264 0.0.0.0:48150' } else { '--driver-h264 0.0.0.0:48150' }
+                $script:hostChild = Start-Process $script:hostExe -ArgumentList $hostMode -WindowStyle Hidden -PassThru -RedirectStandardError "$script:sessionPath/host.log" -RedirectStandardOutput "$script:sessionPath/host.out"
                 $null = $script:hostChild.Handle
                 $script:starting = $false
             } elseif (((Get-Date) - $script:startTime).TotalSeconds -gt 15) { throw 'Tiempo de espera agotado al iniciar el broker.' }
         } elseif ($script:hostChild -and !$script:hostChild.HasExited -and $stop.Enabled) {
             if ($script:manager.HasExited) { throw 'El broker se ha cerrado. Consulta los registros.' }
-            $connections = Get-NetTCPConnection -LocalPort 48150 -State Established -ErrorAction SilentlyContinue
-            $status.Text = if ($connections) { 'Deck conectada.' } else { 'Esperando Deck. Abre WindowDeck en la Steam Deck.' }
+            $stateLine = Get-Content -LiteralPath "$script:sessionPath/host.out" -Tail 1 -ErrorAction SilentlyContinue
+            $status.Text = switch ($stateLine) {
+                'windowdeck_state=streaming' { 'Deck conectada.' }
+                'windowdeck_state=negotiating' { 'Preparando la conexion con la Deck...' }
+                'windowdeck_state=listening' { 'Esperando Deck. Abre WindowDeck en la Steam Deck.' }
+                default { 'Iniciando el host...' }
+            }
         } elseif ($stop.Enabled) { throw 'El host se ha cerrado. Consulta los registros.' }
-        elseif (!$script:manager -or $script:manager.HasExited) { $start.Enabled = $true }
-    } catch { Stop-Session; $status.Text = $_.Exception.Message }
+        elseif ($script:hostChild -and !$script:hostChild.HasExited) {
+            if ($script:stoppingSince -and ((Get-Date) - $script:stoppingSince).TotalSeconds -gt 8) { $script:hostChild.Kill() }
+        }
+        elseif (!$script:manager -or $script:manager.HasExited) {
+            $start.Enabled = $true
+            if (!$script:lastFailure -and $script:stoppingSince) { $status.Text = 'Detenido. Pulsa Iniciar para conectar de nuevo.' }
+        }
+    } catch { Stop-Session; $script:lastFailure = $_.Exception.Message; $status.Text = $script:lastFailure }
 })
 $form.Add_FormClosing({ Stop-Session })
 try { $timer.Start(); [void]$form.ShowDialog() }
-finally { $timer.Stop(); $timer.Dispose(); $mutex.ReleaseMutex(); $mutex.Dispose(); $form.Dispose() }
+finally {
+    $timer.Stop(); $timer.Dispose()
+    if ($script:hostChild -and !$script:hostChild.HasExited) {
+        if (!$script:hostChild.WaitForExit(8000)) { $script:hostChild.Kill() }
+    }
+    $mutex.ReleaseMutex(); $mutex.Dispose(); $form.Dispose()
+}

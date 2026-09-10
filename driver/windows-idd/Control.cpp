@@ -280,7 +280,7 @@ static int Broker(bool frames = false, bool gpuMode = false)
     return 1;
 }
 
-static int Lease(bool frames = false, bool gpuMode = false, bool streaming = false)
+static int Lease(bool frames = false, bool gpuMode = false, bool streaming = false, bool metadataOnly = false)
 {
     if (streaming) {
         HANDLE watcher = CreateThread(nullptr, 0, WatchStreamHost, nullptr, 0, nullptr);
@@ -316,13 +316,18 @@ static int Lease(bool frames = false, bool gpuMode = false, bool streaming = fal
         return 1;
     }
     int result = 0;
-    if (frames) {
+    if (metadataOnly) {
+        wchar_t mapping[128] = {};
+        if (!ReadFile(pipe, mapping, sizeof(mapping), &count, nullptr) || count != sizeof(mapping) ||
+            mapping[127] || !FrameExchange::ValidName(mapping)) { CloseHandle(pipe); return 1; }
+        printf("READY %ls\n", mapping);
+    } else if (frames) {
         RECT bounds = {};
         result = VerifyDisplay(false, true, &bounds) == 0 ?
             (streaming ? StreamCpuFrames(pipe) : ReadProbeFrames(pipe, bounds, gpuMode)) : 1;
     } else puts("READY");
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
-    while (!frames && PipeAlive(pipe) && PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) && !available) Sleep(50);
+    while ((!frames || metadataOnly) && PipeAlive(pipe) && PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) && !available) Sleep(50);
     BYTE release = 0;
     if (WriteFile(pipe, &release, 1, &count, nullptr))
     {
@@ -345,12 +350,15 @@ int wmain(int argc, wchar_t** argv)
     if (argc == 2 && wcscmp(argv[1], L"--lease") == 0) return Lease();
     if (argc == 2 && wcscmp(argv[1], L"--gpu-frame-broker") == 0) return Broker(true, true);
     if (argc == 2 && wcscmp(argv[1], L"--gpu-frame-source") == 0) return Lease(true, true);
+    if (argc == 2 && wcscmp(argv[1], L"--gpu-lease") == 0) return Lease(true, true, false, true);
+    if (argc == 2 && wcscmp(argv[1], L"--version") == 0) { puts("windowdeck-display 0.2.0 frame_protocol=1,2 gpu_lease=true"); return 0; }
     if (argc == 2 && wcscmp(argv[1], L"--frame-broker") == 0) return Broker(true);
     if (argc == 2 && wcscmp(argv[1], L"--frame-source") == 0) return Lease(true);
     if (argc == 2 && wcscmp(argv[1], L"--cpu-frame-stream") == 0) return Lease(true, false, true);
     puts("Usage: windowdeck-display --run | --probe | --verify | --source | --self-test\n--run and --probe require the installed driver and administrator privileges.\n--verify checks an existing active desktop without changing it (0: 1280x800@60, 4: inactive/wrong mode).\n--source prints only the GDI device name of that verified WindowDeck desktop.");
     puts("--broker: elevated local controller; creates a monitor only while --lease holds a connection.\n--lease: host helper; READY on stdout, stdin EOF releases the monitor. Do not run interactively.");
     puts("--gpu-frame-broker / --gpu-frame-source: optional D3D11 shared-texture probe.");
+    puts("--gpu-lease: shared-texture lease for the integrated Rust host; READY mapping on stdout, stdin EOF releases the display.");
     puts("--cpu-frame-stream: continuous raw BGRA desktop at 60 FPS for the host; stdin EOF releases the display.");
     puts("--frame-broker: elevated controller for the optional shared-memory frame probe.\n--frame-source: binary BGRA probe helper, launched by windowdeck-host --driver-frame-test.");
     return argc == 1 || (argc == 2 && wcscmp(argv[1], L"--help") == 0) ? 0 : 2;

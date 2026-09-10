@@ -1,5 +1,5 @@
 //! LAN discovery is a locator, not authentication. The TCP handshake remains mandatory.
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::BTreeMap;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -12,7 +12,7 @@ impl Drop for Discovery {
         let _ = self.0.shutdown();
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Host {
     pub name: String,
     pub identity: String,
@@ -60,49 +60,102 @@ pub fn advertise(bound: SocketAddr, codec: &str) -> io::Result<Discovery> {
     Ok(daemon)
 }
 
-pub fn browse(codec: &str, identity: Option<&str>) -> io::Result<Vec<Host>> {
-    let daemon = Discovery(ServiceDaemon::new().map_err(error)?);
-    let events = daemon.0.browse(SERVICE).map_err(error)?;
-    let deadline = Instant::now() + Duration::from_secs(4);
-    let mut hosts = BTreeMap::new();
-    while Instant::now() < deadline {
-        if let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            match event {
-                ServiceEvent::ServiceResolved(info)
-                    if info.get_property_val_str("version") == Some("1")
-                        && info.get_property_val_str("codec") == Some(codec) =>
-                {
-                    if identity.is_some_and(|id| id != info.get_fullname()) {
-                        continue;
-                    }
-                    let addresses: Vec<_> = info
-                        .get_addresses_v4()
-                        .into_iter()
-                        .filter(|ip| !ip.is_unspecified() && !ip.is_multicast())
-                        .map(|ip| SocketAddr::from((ip, info.get_port())))
-                        .collect();
-                    if info.get_port() != 0 && !addresses.is_empty() {
-                        hosts.insert(
-                            info.get_fullname().to_owned(),
-                            Host {
-                                name: info
-                                    .get_property_val_str("name")
-                                    .unwrap_or(info.get_hostname())
-                                    .to_owned(),
-                                identity: info.get_fullname().to_owned(),
-                                addresses,
-                            },
-                        );
-                    }
+/// Keeps mDNS running independently of video, including while a session is active.
+/// Drain updates before reconnecting so an old address is never pinned forever.
+pub struct Browser {
+    _daemon: Discovery,
+    events: Receiver<ServiceEvent>,
+    codec: String,
+    hosts: BTreeMap<String, Host>,
+}
+
+impl Browser {
+    pub fn new(codec: &str) -> io::Result<Self> {
+        let daemon = Discovery(ServiceDaemon::new().map_err(error)?);
+        daemon.0.set_ip_check_interval(2).map_err(error)?;
+        let events = daemon.0.browse(SERVICE).map_err(error)?;
+        Ok(Self {
+            _daemon: daemon,
+            events,
+            codec: codec.into(),
+            hosts: BTreeMap::new(),
+        })
+    }
+
+    fn update(&mut self, event: ServiceEvent) {
+        match event {
+            ServiceEvent::ServiceResolved(info)
+                if info.get_property_val_str("version") == Some("1")
+                    && info.get_property_val_str("codec") == Some(self.codec.as_str()) =>
+            {
+                let mut addresses: Vec<_> = info
+                    .get_addresses_v4()
+                    .into_iter()
+                    .filter(|ip| !ip.is_unspecified() && !ip.is_multicast())
+                    .map(|ip| SocketAddr::from((ip, info.get_port())))
+                    .collect();
+                addresses.sort_unstable();
+                if info.get_port() != 0 && !addresses.is_empty() {
+                    self.hosts.insert(
+                        info.get_fullname().to_owned(),
+                        Host {
+                            name: info
+                                .get_property_val_str("name")
+                                .unwrap_or(info.get_hostname())
+                                .to_owned(),
+                            identity: info.get_fullname().to_owned(),
+                            addresses,
+                        },
+                    );
+                } else {
+                    self.hosts.remove(info.get_fullname());
                 }
-                ServiceEvent::ServiceRemoved(_, name) => {
-                    hosts.remove(&name);
+            }
+            ServiceEvent::ServiceResolved(info) => {
+                self.hosts.remove(info.get_fullname());
+            }
+            ServiceEvent::ServiceRemoved(_, name) => {
+                self.hosts.remove(&name);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn snapshot(&mut self) -> Vec<Host> {
+        while let Ok(event) = self.events.try_recv() {
+            self.update(event);
+        }
+        self.hosts.values().cloned().collect()
+    }
+
+    /// Returns as soon as a matching host exists; the timeout is only an upper bound.
+    pub fn wait(&mut self, identity: Option<&str>, timeout: Duration) -> io::Result<Vec<Host>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let hosts: Vec<_> = self
+                .snapshot()
+                .into_iter()
+                .filter(|host| identity.is_none_or(|id| id == host.identity))
+                .collect();
+            if !hosts.is_empty() || Instant::now() >= deadline {
+                return Ok(hosts);
+            }
+            match self
+                .events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(event) => self.update(event),
+                Err(mdns_sd::RecvTimeoutError::Timeout) => return Ok(Vec::new()),
+                Err(mdns_sd::RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::other("mDNS stopped"));
                 }
-                _ => {}
             }
         }
     }
-    Ok(hosts.into_values().collect())
+}
+
+pub fn browse(codec: &str, identity: Option<&str>) -> io::Result<Vec<Host>> {
+    Browser::new(codec)?.wait(identity, Duration::from_secs(4))
 }
 
 pub fn connect_host(host: &Host) -> io::Result<TcpStream> {

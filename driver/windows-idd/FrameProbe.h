@@ -131,6 +131,7 @@ inline int StreamCpuFrames(HANDLE pipe) {
     if (memory->magic == FrameExchange::Magic && memory->version == 1) {
         auto pixels = std::make_unique<BYTE[]>(FrameExchange::Bytes);
         UINT64 previous = 0, outputs = 0, fresh = 0, writeMicros = 0, maxWriteMicros = 0;
+        UINT64 stale = 0, acquireToInputUs = 0;
         LARGE_INTEGER clockFrequency;
         QueryPerformanceFrequency(&clockFrequency);
         const UINT64 frequency = clockFrequency.QuadPart;
@@ -144,13 +145,26 @@ inline int StreamCpuFrames(HANDLE pipe) {
             DWORD available = 0;
             if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) || available) break;
             if (!timer.Wait(schedule.Deadline(), frequency)) break;
+            FrameExchange::Slot* selected = nullptr;
+            const UINT64 sampled = FrameClock();
             for (auto& slot : memory->slots) {
                 if (InterlockedCompareExchange(&slot.state, FrameExchange::Reading, FrameExchange::Ready) != FrameExchange::Ready) continue;
                 const auto packet = slot.packet;
                 const bool valid = packet.magic == FrameExchange::Magic && packet.width == FrameExchange::Width &&
-                    packet.height == FrameExchange::Height && packet.bytes == FrameExchange::Bytes && packet.sequence > previous;
-                if (valid) { memcpy(pixels.get(), slot.pixels, FrameExchange::Bytes); previous = packet.sequence; ++fresh; }
-                InterlockedExchange(&slot.state, FrameExchange::Free);
+                    packet.height == FrameExchange::Height && packet.bytes == FrameExchange::Bytes && packet.sequence > previous &&
+                    packet.frequency == frequency && packet.acquiredQpc <= packet.publishedQpc && packet.publishedQpc <= sampled &&
+                    sampled - packet.acquiredQpc <= frequency / 20;
+                if (valid && (!selected || packet.sequence > selected->packet.sequence)) {
+                    if (selected) { InterlockedExchange(&selected->state, FrameExchange::Free); ++stale; }
+                    selected = &slot;
+                } else { InterlockedExchange(&slot.state, FrameExchange::Free); ++stale; }
+            }
+            if (selected) {
+                memcpy(pixels.get(), selected->pixels, FrameExchange::Bytes);
+                previous = selected->packet.sequence;
+                acquireToInputUs += (FrameClock() - selected->packet.acquiredQpc) * 1000000 / frequency;
+                ++fresh;
+                InterlockedExchange(&selected->state, FrameExchange::Free);
             }
             if (!previous) {
                 if (FrameClock() - started > frequency * 8) break;
@@ -172,6 +186,8 @@ inline int StreamCpuFrames(HANDLE pipe) {
                 fprintf(stderr, "driver_cpu_interval fps=%.3f write_mean_us=%llu write_max_us=%llu missed_deadlines=%llu\n",
                     intervalOutputs * static_cast<double>(frequency) / (now - report),
                     intervalOutputs ? intervalWriteUs / intervalOutputs : 0, intervalMaxWriteUs, skipped);
+                fprintf(stderr, "driver_cpu_freshness new=%llu repeated=%llu dropped_raw=%llu acquire_to_input_mean_us=%llu\n",
+                    fresh, outputs - fresh, stale, fresh ? acquireToInputUs / fresh : 0);
                 reportOutputs = outputs; intervalWriteUs = intervalMaxWriteUs = skipped = 0;
                 report = now;
             }

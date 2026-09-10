@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+windowdeck-media = { path = "../windowdeck-media", optional = true }
 font8x8 = "0.3"
 softbuffer = "0.4.8"
 windowdeck-diagnostics = { path = "../windowdeck-diagnostics" }
@@ -14,3 +15,6 @@ winit = "0.30.13"
 
 [lints]
 workspace = true
+
+[features]
+native-media = ["dep:windowdeck-media", "windowdeck-media/native"]

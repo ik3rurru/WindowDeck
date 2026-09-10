@@ -1,5 +1,9 @@
 # Punto de continuación — 8 de septiembre de 2026
 
+Actualización del 10 de septiembre: el usuario ha pedido implementar `mejoras.txt`
+y reanudar este trabajo. El estado actual es [WindowDeck 0.2.0](mejoras-implementadas.md).
+La pausa de optimización descrita más abajo pertenece a la sesión anterior.
+
 ## Estado más reciente: H.264 desde frames CPU del driver
 
 **Evaluación de encoders para latencia/FPS (8 de septiembre):** se añadió `WINDOWDECK_H264_ENCODER` para comparar `libx264`, `h264_amf`, `h264_nvenc` y `h264_mf`, manteniendo `libx264` como valor predeterminado. En pruebas sintéticas todos los encoders hardware superan tiempo real; en la ruta real CPU del driver, AMF empezó cerca de 35 FPS y subió a unos 49, mientras NVENC alcanzó unos 60 FPS en escritorio estático pero cayó a unos 30 FPS con movimiento. AMF entregó el primer paquete en 411 ms y NVENC en 171 ms, pero sus tasas no fueron consistentes con movimiento. No se cambia aún el predeterminado. Siguiente trabajo de rendimiento: separar y optimizar la transferencia BGRA y el backpressure del pipeline; después repetir una prueba visual con el candidato hardware más estable.

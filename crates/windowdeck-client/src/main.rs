@@ -23,6 +23,8 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 mod host_picker;
+#[cfg(feature = "native-media")]
+mod native;
 const DEFAULT_ADDRESS: &str = "auto";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
@@ -39,28 +41,54 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let mut options = parse_options(env::args().skip(1))?;
+    #[cfg(feature = "native-media")]
+    if env::args().nth(1).as_deref() == Some("--media-self-test") {
+        windowdeck_media::self_test()?;
+        return Ok(());
+    }
+    if env::args().nth(1).as_deref() == Some("--version") {
+        println!(
+            "windowdeck-client {} protocol={} profile={}",
+            env!("CARGO_PKG_VERSION"),
+            windowdeck_protocol::PROTOCOL_VERSION,
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        println!("native_media={}", cfg!(feature = "native-media"));
+        #[cfg(feature = "native-media")]
+        println!("ffmpeg={}", windowdeck_media::version());
+        return Ok(());
+    }
+    let options = parse_options(env::args().skip(1))?;
+    let native = env::args().any(|arg| arg == "--native")
+        || (cfg!(feature = "native-media")
+            && options.address == "auto"
+            && !env::args().any(|arg| arg == "--ffplay")
+            && !options.ffplay_baseline);
+    if native && !cfg!(feature = "native-media") {
+        return Err("recompila con --features native-media para usar --native".into());
+    }
+    let mut target = Target::from(options.address.as_str());
     if options.address == "auto" {
         let codec = if options.h264_test { "h264" } else { "rgb332" };
-        let hosts = windowdeck_protocol::discovery::browse(codec, None)?;
-        let selected = if hosts.len() == 1 {
-            Some(0)
-        } else {
-            host_picker::choose(&hosts)?
-        };
-        let Some(index) = selected else {
+        let mut browser = windowdeck_protocol::discovery::Browser::new(codec)?;
+        let Some(host) = host_picker::choose(&mut browser)? else {
             return Ok(());
         };
-        options.address = format!("mdns:{}", hosts[index].identity);
+        target.address = format!("mdns:{}", host.identity);
+        target.browser = Some(Arc::new(Mutex::new(browser)));
     }
     if options.h264_test {
-        return receive_h264_test(
-            &options.address,
-            options.fullscreen,
-            options.ffplay_baseline,
-        );
+        #[cfg(feature = "native-media")]
+        if native {
+            return native::run(target, options.fullscreen);
+        }
+        return receive_h264_test(&target, options.fullscreen, options.ffplay_baseline);
     }
-    let (stream, session_id, width, height) = connect(&options.address, VideoCodec::Rgb332)?;
+    let (stream, session_id, width, height, _) = connect(&target, VideoCodec::Rgb332)?;
     let shutdown = stream.try_clone()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));
@@ -68,7 +96,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let worker = receive_frames(
         stream,
         session_id,
-        options.address,
+        target,
         Arc::clone(&latest),
         Arc::clone(&stopping),
         event_loop.create_proxy(),
@@ -108,6 +136,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
         match argument.as_str() {
             "--fullscreen" => fullscreen = true,
             "--h264-test" => h264_test = true,
+            "--native" | "--ffplay" => h264_test = true,
             "--ffplay-baseline" => ffplay_baseline = true,
             _ if argument.starts_with('-') => return Err("opción desconocida"),
             _ if address.is_none() => address = Some(argument),
@@ -128,14 +157,46 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     })
 }
 
-fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16), Box<dyn Error>> {
+#[derive(Clone)]
+struct Target {
+    address: String,
+    browser: Option<Arc<Mutex<windowdeck_protocol::discovery::Browser>>>,
+}
+
+impl From<&str> for Target {
+    fn from(address: &str) -> Self {
+        Self {
+            address: address.into(),
+            browser: None,
+        }
+    }
+}
+
+type Connected = (TcpStream, u64, u16, u16, VideoCodec);
+fn connect(target: &Target, codec: VideoCodec) -> Result<Connected, Box<dyn Error>> {
+    connect_observed(target, codec, None)
+}
+
+fn connect_observed(
+    target: &Target,
+    codec: VideoCodec,
+    observer: Option<(&AtomicBool, &Mutex<TcpStream>)>,
+) -> Result<Connected, Box<dyn Error>> {
+    let address = target.address.as_str();
     let mut stream = if let Some(identity) = address.strip_prefix("mdns:") {
-        let codec = if codec == VideoCodec::H264 {
+        let codec = if codec != VideoCodec::Rgb332 {
             "h264"
         } else {
             "rgb332"
         };
-        let hosts = windowdeck_protocol::discovery::browse(codec, Some(identity))?;
+        let hosts = if let Some(browser) = &target.browser {
+            browser
+                .lock()
+                .map_err(|_| io::Error::other("mDNS lock poisoned"))?
+                .wait(Some(identity), Duration::from_millis(700))?
+        } else {
+            windowdeck_protocol::discovery::browse(codec, Some(identity))?
+        };
         let host = hosts.first().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -152,6 +213,15 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    if let Some((stopping, shutdown)) = observer {
+        let mut watched = shutdown
+            .lock()
+            .map_err(|_| io::Error::other("socket lock poisoned"))?;
+        if stopping.load(Ordering::Relaxed) {
+            return Err(io::Error::from(io::ErrorKind::Interrupted).into());
+        }
+        *watched = stream.try_clone()?;
+    }
     emit(Level::Info, "host_connected", &[("address", address)]);
 
     write_message(
@@ -183,17 +253,29 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
                 800
             },
             max_fps: 60,
-            codecs: codec.capability(),
+            codecs: codec.capability()
+                | if codec == VideoCodec::H264Frames {
+                    VideoCodec::H264.capability()
+                } else {
+                    0
+                },
         },
     )?;
-    let (session_id, width, height) = match read_message(&mut stream)? {
+    let (session_id, width, height, actual_codec) = match read_message(&mut stream)? {
         Message::SessionConfig {
             session_id,
             width,
             height,
             fps,
             codec: configured_codec,
-        } if width > 0 && height > 0 && fps > 0 && configured_codec == codec => {
+        } if width > 0
+            && height > 0
+            && fps > 0
+            && fps <= 60
+            && (configured_codec == codec
+                || (codec == VideoCodec::H264Frames && configured_codec == VideoCodec::H264))
+            && (configured_codec != VideoCodec::H264Frames || (width <= 1280 && height <= 800)) =>
+        {
             emit(
                 Level::Info,
                 "session_configured",
@@ -203,16 +285,16 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
                     ("fps", &fps.to_string()),
                     (
                         "codec",
-                        if codec == VideoCodec::H264 {
-                            "h264"
-                        } else {
-                            "rgb332"
+                        match configured_codec {
+                            VideoCodec::H264 => "h264_mpegts",
+                            VideoCodec::H264Frames => "h264_access_units",
+                            VideoCodec::Rgb332 => "rgb332",
                         },
                     ),
                 ],
             );
             state = state.apply(ConnectionEvent::Negotiated)?;
-            (session_id, width, height)
+            (session_id, width, height, configured_codec)
         }
         Message::SessionConfig { .. } => {
             return Err("configuración de sesión o códec no compatible".into());
@@ -225,7 +307,7 @@ fn connect(address: &str, codec: VideoCodec) -> Result<(TcpStream, u64, u16, u16
         }
         _ => return Err("se esperaba Start".into()),
     }
-    Ok((stream, session_id, width, height))
+    Ok((stream, session_id, width, height, actual_codec))
 }
 
 fn ffplay_command(fullscreen: bool, baseline: bool) -> Command {
@@ -261,11 +343,21 @@ fn ffplay_command(fullscreen: bool, baseline: bool) -> Command {
 }
 
 fn receive_h264_test(
-    address: &str,
+    address: &Target,
     fullscreen: bool,
     baseline: bool,
 ) -> Result<(), Box<dyn Error>> {
     let (stream, session_id, ..) = connect(address, VideoCodec::H264)?;
+    play_legacy(stream, session_id, address, fullscreen, baseline)
+}
+
+fn play_legacy(
+    stream: TcpStream,
+    session_id: u64,
+    address: &Target,
+    fullscreen: bool,
+    baseline: bool,
+) -> Result<(), Box<dyn Error>> {
     let mut player = ffplay_command(fullscreen, baseline)
         .spawn()
         .map_err(|error| {
@@ -284,7 +376,7 @@ fn receive_h264_test(
     let stopping = Arc::new(AtomicBool::new(false));
     let worker_stopping = Arc::clone(&stopping);
     let worker_shutdown = Arc::clone(&shutdown);
-    let address = address.to_owned();
+    let address = address.clone();
     let worker = thread::spawn(move || {
         reconnect_h264(
             stream,
@@ -354,7 +446,7 @@ fn transport_error(error: &(dyn Error + 'static)) -> bool {
 fn reconnect_h264(
     mut stream: TcpStream,
     mut session_id: u64,
-    address: &str,
+    address: &Target,
     mut input: impl Write,
     stopping: &AtomicBool,
     shutdown: &Mutex<TcpStream>,
@@ -396,7 +488,7 @@ fn reconnect_h264(
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            match connect(address, VideoCodec::H264) {
+            match connect_observed(address, VideoCodec::H264, Some((stopping, shutdown))) {
                 Ok((next, id, ..)) => {
                     let mut watched = shutdown
                         .lock()
@@ -438,13 +530,17 @@ fn forward_h264(
     let mut bytes = 0_u64;
     let mut chunks = 0_u64;
     let mut chunks_at_report = 0_u64;
+    let mut read_times = windowdeck_diagnostics::Timings::default();
+    let mut write_times = windowdeck_diagnostics::Timings::default();
     loop {
+        let read_started = Instant::now();
         let message = match read_message(&mut reader) {
             Ok(message) => message,
             Err(_) if stopping.load(Ordering::Relaxed) => break,
             Err(ProtocolError::Io(error)) => return Err(error),
             Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
         };
+        read_times.record(read_started.elapsed());
         match message {
             Message::VideoChunk {
                 session_id: chunk_session_id,
@@ -460,12 +556,14 @@ fn forward_h264(
                 && fragment_count == 1
                 && (chunks != 0 || keyframe) =>
             {
+                let write_started = Instant::now();
                 if let Err(error) = output.write_all(&payload) {
                     if error.kind() == io::ErrorKind::BrokenPipe {
                         break;
                     }
                     return Err(error);
                 }
+                write_times.record(write_started.elapsed());
                 bytes = bytes
                     .checked_add(payload.len() as u64)
                     .ok_or_else(|| io::Error::other("contador H.264 desbordado"))?;
@@ -478,6 +576,8 @@ fn forward_h264(
                     );
                 }
                 if last_report.elapsed() >= Duration::from_secs(1) {
+                    read_times.report("h264_tcp_read_metrics");
+                    write_times.report("h264_player_write_metrics");
                     let elapsed = started.elapsed();
                     let report_elapsed = last_report.elapsed();
                     let report_chunks = chunks.saturating_sub(chunks_at_report);
@@ -545,7 +645,7 @@ enum ClientEvent {
 fn receive_frames(
     mut stream: TcpStream,
     mut session_id: u64,
-    address: String,
+    address: Target,
     latest: Arc<Mutex<Option<Frame>>>,
     stopping: Arc<AtomicBool>,
     proxy: EventLoopProxy<ClientEvent>,
@@ -1006,7 +1106,7 @@ mod tests {
         reconnect_h264(
             client,
             10,
-            &address,
+            &Target::from(address.as_str()),
             &mut output,
             &AtomicBool::new(false),
             &shutdown,
@@ -1027,7 +1127,14 @@ mod tests {
         let cancel = Arc::clone(&stopping);
         let shutdown = Mutex::new(client.try_clone().unwrap());
         let worker = thread::spawn(move || {
-            reconnect_h264(client, 1, &address, Vec::new(), &cancel, &shutdown)
+            reconnect_h264(
+                client,
+                1,
+                &Target::from(address.as_str()),
+                Vec::new(),
+                &cancel,
+                &shutdown,
+            )
         });
         thread::sleep(Duration::from_millis(100));
         stopping.store(true, Ordering::Relaxed);
