@@ -1,10 +1,42 @@
-# Punto de continuación — 8 de septiembre de 2026
+# Punto de continuación — 10 de septiembre de 2026
 
 Actualización del 10 de septiembre: el usuario ha pedido implementar `mejoras.txt`
 y reanudar este trabajo. El estado actual es [WindowDeck 0.2.0](mejoras-implementadas.md).
 La pausa de optimización descrita más abajo pertenece a la sesión anterior.
 
-## Estado más reciente: H.264 desde frames CPU del driver
+## Consolidación actual
+
+Las entregas 1 y 2 acordadas actualizan el estado y simplifican la CLI. El panel
+utiliza CPU/libx264 por defecto; `-Native` activa la GPU experimental. El host
+sin argumentos o con `--driver-h264` utiliza CPU. Las pruebas y referencias
+históricas pasan a `diag`; ver [development.md](development.md) y
+[ADR 0016](adr/0016-supported-video-routes.md). La integración y distribución
+de FFmpeg quedan documentadas en [ADR 0017](adr/0017-media-packaging.md).
+
+Cierre de la entrega: formato y Clippy correctos, 32 pruebas superadas tanto
+en configuración base como nativa (multicast excluido), release y autopruebas
+multimedia correctos. El paquete local generado es
+`target/WindowDeck-0.2.0-25dab3af41da42b4b54520c6d571aecf.zip`;
+se verificaron sus ejecutables, fuentes y hashes. El detalle de validación está
+en [testing.md](testing.md#consolidación-de-rutas-y-cli--10-de-septiembre-de-2026).
+
+La regresión del límite de 250 ms está corregida para MPEG-TS. Las pruebas reales
+del día 10 registraron 207 y 54 segundos sin desconexiones inesperadas. Suspensión
+y bloqueo con el cliente anterior se recuperaron en los ensayos finales del día
+8, descritos en [testing.md](testing.md); los fallos intermedios que aparecen más
+abajo son históricos y no representan el estado actual.
+
+Siguiente entrega: migrar el panel y su gestión de procesos a `windowdeck-launcher`
+en Rust, conservando acciones y permisos. Después quedan emparejamiento/cifrado,
+validación CPU/GPU en la Deck, decisión de IPC e instalación limpia. No dar por
+comprobados la ruta GPU completa, una hora de vídeo o cambio de usuario. La DLL
+del driver y los perfiles de vídeo no se modifican en esta consolidación.
+
+El [roadmap de consolidación](../windowdeck-roadmap-consolidacion.md) distingue
+lo implementado de la validación pendiente. Los registros de sesiones antiguas
+se conservan a continuación como evidencia, no como instrucciones de continuación.
+
+## Historial del 8 de septiembre: H.264 desde frames CPU del driver
 
 **Evaluación de encoders para latencia/FPS (8 de septiembre):** se añadió `WINDOWDECK_H264_ENCODER` para comparar `libx264`, `h264_amf`, `h264_nvenc` y `h264_mf`, manteniendo `libx264` como valor predeterminado. En pruebas sintéticas todos los encoders hardware superan tiempo real; en la ruta real CPU del driver, AMF empezó cerca de 35 FPS y subió a unos 49, mientras NVENC alcanzó unos 60 FPS en escritorio estático pero cayó a unos 30 FPS con movimiento. AMF entregó el primer paquete en 411 ms y NVENC en 171 ms, pero sus tasas no fueron consistentes con movimiento. No se cambia aún el predeterminado. Siguiente trabajo de rendimiento: separar y optimizar la transferencia BGRA y el backpressure del pipeline; después repetir una prueba visual con el candidato hardware más estable.
 

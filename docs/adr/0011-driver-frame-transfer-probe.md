@@ -1,5 +1,7 @@
 # ADR 0011: prototipo de frames del IDD a memoria compartida
 
+> Actualización de consolidación (2026-09-10): el probe se ejecuta con `windowdeck-host diag driver-frames`. La ruta CPU es la predeterminada según el [ADR 0016](0016-supported-video-routes.md), pero la elección definitiva del IPC sigue pendiente de la comparación integrada. Las mediciones siguientes son del probe original.
+
 - Fecha: 2026-09-07
 - Estado: prototipo CPU implementado y validado en UMDF con el driver 0.1.0.8; comparación de alternativas e integración con el encoder pendientes.
 

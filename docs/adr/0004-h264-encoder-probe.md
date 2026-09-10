@@ -1,5 +1,7 @@
 # ADR 0004: prueba inicial del encoder H.264
 
+> Actualización de consolidación (2026-09-10): esta prueba histórica de Media Foundation se ejecuta ahora con `windowdeck-host diag encode`. El encoder y empaquetado actuales se describen en el [ADR 0017](0017-media-packaging.md). Las mediciones de este documento corresponden al prototipo original.
+
 - Estado: aceptado
 - Fecha: 2026-09-04
 

@@ -1,4 +1,4 @@
-param([switch]$Broker, [string]$Session, [int]$OwnerId, [switch]$Native, [switch]$Legacy)
+param([switch]$Broker, [string]$Session, [int]$OwnerId, [switch]$Native)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $display = Join-Path $root 'bin/windowdeck-display.exe'
@@ -89,7 +89,8 @@ $start.Add_Click({
         foreach ($file in @($script:hostExe,$display)) { if (!(Test-Path $file)) { throw "Falta $file. Compila el proyecto antes de iniciar." } }
         $version = & $script:hostExe --version
         if ($LASTEXITCODE) { throw 'No se pudo abrir el host. Comprueba que sus DLL estan junto al ejecutable.' }
-        $script:useNative = !$Legacy -and ($version -contains 'native_media=true')
+        $script:useNative = [bool]$Native
+        if ($script:useNative -and !($version -contains 'native_media=true')) { throw 'La ruta GPU experimental requiere compilar con native-media.' }
         if (!$script:useNative -and !(Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw 'FFmpeg no esta en PATH. Usa el paquete completo de WindowDeck.' }
         $script:sessionPath = Join-Path $root ('target/launcher-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory $script:sessionPath | Out-Null

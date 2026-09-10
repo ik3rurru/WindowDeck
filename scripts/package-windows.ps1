@@ -25,13 +25,13 @@ Copy-Item -LiteralPath (Join-Path $packageSdk 'README.txt') -Destination (Join-P
 Copy-Item -LiteralPath (Join-Path $packageRoot 'target/media-sdk/SDL2-2.32.10/LICENSE.txt') -Destination (Join-Path $packagePath 'licenses/SDL2.txt')
 Copy-Item -LiteralPath (Join-Path $packageRoot 'driver/windows-idd/LICENSE') -Destination (Join-Path $packagePath 'licenses/driver-MS-PL.txt')
 foreach ($license in @('LICENSE-MIT', 'LICENSE-APACHE')) { Copy-Item -LiteralPath (Join-Path $packageRoot $license) -Destination (Join-Path $packagePath 'licenses') }
-Copy-Item -LiteralPath (Join-Path $packageRoot 'docs/mejoras-implementadas.md') -Destination (Join-Path $packagePath 'README.md')
+Copy-Item -LiteralPath (Join-Path $packageRoot 'packaging/windows/README.md') -Destination (Join-Path $packagePath 'README.md')
 $sourcePath = Join-Path $packagePath 'source'
 New-Item -ItemType Directory -Path $sourcePath | Out-Null
 foreach ($folder in @('crates', 'driver', 'scripts', 'docs', 'packaging', 'assets', '.github')) {
     Copy-Item -LiteralPath (Join-Path $packageRoot $folder) -Destination $sourcePath -Recurse
 }
-foreach ($file in @('Cargo.toml', 'Cargo.lock', 'README.md', 'WindowDeck.vbs', 'LICENSE-MIT', 'LICENSE-APACHE')) {
+foreach ($file in @('Cargo.toml', 'Cargo.lock', 'README.md', 'WINDOWDECK_ROADMAP.md', 'windowdeck-roadmap-consolidacion.md', 'WindowDeck.vbs', 'LICENSE-MIT', 'LICENSE-APACHE')) {
     Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $sourcePath
 }
 $manifest = [ordered]@{

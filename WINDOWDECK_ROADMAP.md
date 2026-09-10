@@ -2,6 +2,8 @@
 
 ## Hoja de ruta técnica para desarrollar una segunda pantalla entre Windows 11 y Steam Deck
 
+Estado de consolidación (2026-09-10): la ruta soportada del prototipo es driver → CPU/libx264 → Steam Deck y es la opción predeterminada del host y del panel. Las pruebas y rutas históricas se ejecutan mediante `windowdeck-host diag`; la ruta GPU nativa sigue siendo experimental y requiere validación completa en la Deck. El orden del trabajo pendiente está en la [roadmap de consolidación](windowdeck-roadmap-consolidacion.md), con las decisiones actuales en los [ADR 0016](docs/adr/0016-supported-video-routes.md) y [0017](docs/adr/0017-media-packaging.md). Los objetivos de esta hoja de ruta siguen siendo requisitos, no una lista de funciones ya entregadas.
+
 ## 1. Visión del proyecto
 
 WindowDeck permitirá utilizar la pantalla de una Steam Deck como un monitor secundario real de un PC con Windows 11.
@@ -133,7 +135,7 @@ Responsabilidades:
 - exponer timestamps y estadísticas;
 - proporcionar una implementación de software para diagnóstico.
 
-Primera implementación recomendada: Media Foundation en Windows, con preferencia por un encoder de hardware disponible en la GPU.
+Implementación actual: FFmpeg/libx264 en la ruta CPU soportada. La biblioteca opcional `windowdeck-media` implementa la ruta D3D11 y los encoders AMF/NVENC, pendiente de validación completa en la Steam Deck. La prueba inicial de Media Foundation se conserva en `diag encode`; no es el encoder de la ruta soportada. Véase el [ADR 0017](docs/adr/0017-media-packaging.md).
 
 La abstracción no debe exponer tipos específicos de Media Foundation fuera del módulo Windows.
 
@@ -158,13 +160,13 @@ Modos iniciales:
 
 El driver debe partir del ejemplo oficial de Microsoft para Indirect Display Driver. Se recomienda C++ para esta pequeña capa porque el WDK y los ejemplos de IddCx están diseñados alrededor de C/C++. El resto del proyecto continuará en Rust.
 
-El driver se ejecuta fuera de la sesión interactiva. Antes de elegir el IPC definitivo se realizará un prototipo y benchmark de estas posibilidades:
+El driver se ejecuta fuera de la sesión interactiva. Se plantearon estas posibilidades para evaluar el IPC:
 
 1. Codificar dentro del componente IDD y enviar paquetes al servicio.
 2. Compartir recursos D3D11 con el servicio mediante handles compartidos.
 3. Copiar frames a memoria compartida como implementación temporal.
 
-La decisión se registrará en un ADR. No se debe fijar la arquitectura de IPC sin validar que funciona dentro del contexto real de UMDF/IddCx.
+Los prototipos de transferencia CPU y D3D11 están registrados en los [ADR 0011](docs/adr/0011-driver-frame-transfer-probe.md) y [0012](docs/adr/0012-shared-d3d11-frame-probe.md). La ruta CPU funciona con el driver real; falta comparar ambos pipelines completos antes de cerrar el IPC definitivo. La codificación permanece en el host. La tercera opción es una alternativa histórica, no un requisito para introducir ahora un encoder en el driver.
 
 #### `windowdeck-input-windows`
 
@@ -350,6 +352,8 @@ Medidas necesarias:
 
 ## 8. Seguridad básica
 
+Estado actual (2026-09-10): el TCP de control y vídeo no está cifrado ni autentica dispositivos. Hay límites de tamaño y colas, validación de mensajes y fragmentos, y reglas de firewall del lanzador limitadas a redes privadas y subred local. mDNS no acredita la identidad del host. El [README](README.md#seguridad-actual) describe estas garantías y carencias; el bloque 4 de consolidación mantiene pendiente implementar el emparejamiento y proteger la conexión completa antes de activar el monitor.
+
 Aunque la primera versión funcione solo en la red local, no debe aceptar conexiones anónimas sin conocimiento del usuario.
 
 - Descubrimiento automático solamente en la red local.
@@ -368,6 +372,8 @@ Aunque la primera versión funcione solo en la red local, no debe aceptar conexi
 ### Hito 0 — Fundamentos y repositorio
 
 Objetivo: disponer de una base compilable, documentada y comprobable.
+
+Estado actual (2026-09-10): el workspace tiene CI para Windows y Linux, tanto con la configuración base como con multimedia nativa, y empaquetado Flatpak. Los badges están en el README. El último commit publicado antes de esta consolidación, `ae6fcb6`, pasó [CI](https://github.com/ik3rurru/WindowDeck/actions/runs/34506074142) y [Flatpak](https://github.com/ik3rurru/WindowDeck/actions/runs/34506074101). Cada cambio nuevo debe pasar sus propias comprobaciones; estos jobs no sustituyen las pruebas del driver y de la Deck física.
 
 Tareas:
 
@@ -434,7 +440,11 @@ Criterios de aceptación:
 
 Objetivo: obtener una experiencia utilizable a 1280 × 800 y 60 FPS.
 
-Estado actual: host y cliente negocian y reproducen una emisión H.264 continua mediante MPEG-TS, el protocolo v3 y FFplay; la prueba actual está configurada a 1280 × 800, 60 FPS y 16 Mbps. El prototipo usa `ddagrab` y `libx264` sin colas de aplicación, registra métricas cada segundo, conserva [mediciones reales](docs/testing.md) y genera un Flatpak provisional para Steam Deck. La prueba actual reduce también el buffering interno de FFplay y permite comparar el perfil anterior con `--ffplay-baseline`. Se ha retirado `-avioflags direct` tras reproducir errores de cabeceras H.264 al arrancar. El usuario confirma una mejora visual muy notable en la Deck con el perfil reducido, que se mantiene como predeterminado. Tras una sesión prolongada de duración no cuantificada con ambos equipos por Wi-Fi, la calidad sigue siendo muy buena, pero hay latencia perceptible y bloqueos puntuales muy breves; su causa aún no está identificada. Falta cuantificar la latencia, validar una sesión de una hora y sustituir el encoder software por aceleración hardware.
+Estado actual (2026-09-10): la ruta soportada negocia H.264/MPEG-TS a través del mismo TCP que el control, con captura CPU del driver y FFmpeg/libx264. El perfil está configurado a 1280 × 800, 60 Hz y 16 Mbps; no implica 60 fotogramas nuevos por segundo. La cola conserva como máximo dos chunks y tolera un bloqueo de hasta 10 segundos con el cliente anterior basado en FFplay. La corrección del bucle de reconexión se validó en la Deck con sesiones de 207 y 54 segundos y una pausa del cliente de 2 segundos que conservó la sesión.
+
+La comparación CPU/WGC del 2026-09-08 favoreció subjetivamente a CPU, pero no utilizó contenido idéntico ni midió latencia absoluta. La ruta nativa de `windowdeck-media`, con D3D11, conversión y encoder de hardware en el host, está implementada y dispone de pruebas sintéticas y CI; todavía no está validada de extremo a extremo en la Deck.
+
+Pendientes para cerrar este hito: medir latencia absoluta y estabilidad prolongada, contrastar Wi-Fi y Ethernet y validar el cliente y pipeline nativos. Las mediciones y sus límites se conservan en [docs/testing.md](docs/testing.md); los comandos actuales están en [docs/development.md](docs/development.md).
 
 Tareas:
 
@@ -464,7 +474,11 @@ Prioridad acordada el 5 de septiembre de 2026: se conserva la calidad actual y s
 
 Objetivo: convertir el prototipo de mirroring en un segundo monitor real.
 
-Estado actual (2026-09-07): [prototipo C++ x64](driver/windows-idd/README.md) 0.1.0.8 (evolución de 0.1.0.7) compilado, firmado e instalado localmente con certificado de desarrollo, sin cambios de seguridad de arranque. Activa automáticamente un escritorio de 1280 × 800 a 60 Hz al preferir una GPU física de bajo consumo: en el equipo comprobado funciona con AMD integrada, mientras la ruta NVIDIA sigue inactiva. Se verificaron 45 segundos de actividad, 556 superficies con estadísticas aceptadas, rechazo de una segunda instancia y diez ciclos de activación/retirada normal conservando los dispositivos físicos. El usuario confirmó visualmente la segunda pantalla y completó el cierre interactivo con X; se comprobó después la retirada del proceso y los dispositivos virtuales, conservando los físicos sin errores PnP. El [puente provisional `--virtual-h264`](docs/adr/0009-virtual-desktop-capture.md) recaptura el escritorio con Windows Graphics Capture y ya registra más de dos minutos de recepción en la Deck, con encoder cercano a 60 FPS. El usuario confirmó que funciona como esperaba: escritorio extendido y ventana trasladada visibles en la Deck. Observa latencia notable respecto a la pantalla nativa; se conserva como limitación pendiente de medir y optimizar. El 7 de septiembre se comprobaron desconexión abrupta del cliente, nueva conexión al mismo host y retirada del monitor durante vídeo: el encoder y el cliente terminaron, los dispositivos físicos permanecieron sin errores PnP y el usuario confirmó la recuperación de una ventana. Quedan pérdida de red sin cierre TCP y timeout del encoder. La ruta `--auto-virtual-h264` ya liga la vida del monitor a la sesión mediante un controlador local elevado y un host sin elevar ([ADR 0010](docs/adr/0010-automatic-display-lifetime.md)): pasan tres ciclos, segunda petición rechazada, fallo del encoder, terminación del host durante vídeo y dos conexiones reales de la Deck con retirada al cerrar el cliente por SSH. Una tercera conexión confirmó el cierre interactivo de FFplay desde la Deck: se retiraron monitor y encoder, y el usuario confirmó la recuperación de la ventana en el PC. El prototipo opcional del [ADR 0011](docs/adr/0011-driver-frame-transfer-probe.md) ya transfiere BGRA del driver UMDF al host Rust mediante memoria compartida. Pasan dos lecturas de 120 frames con validación de muestras del patrón, terminación del host, reconexión y regresión WGC. Es una referencia CPU (unos 25–27 FPS en este ensayo), sin conexión al encoder ni mejora de latencia demostrada. La comparación D3D11/CPU ya está implementada y validada con 0.1.0.9 (`oem101.inf`), según [ADR 0012](docs/adr/0012-shared-d3d11-frame-probe.md): ambas rutas superan dos lecturas de 120 frames, terminación del host y reconexión. D3D11 publica sin readback en el driver, pero obtener píxeles CPU en el auxiliar tarda unos 24 ms frente a 17 ms en la referencia CPU; no se demuestra una mejora para libx264. El 8 de septiembre se implementó la ruta experimental `--driver-h264`: frames CPU directos a libx264 fuera del driver, con activación y retirada ligadas a la sesión. Pasan vídeo H.264 decodificado en loopback, reconexión, fallo del encoder, terminación del host y regresión WGC; véase [ADR 0013](docs/adr/0013-driver-cpu-h264.md). La prueba CPU en la Deck también pasó: unos 356 segundos, calidad y latencia aceptables según el usuario y recuperación perfecta de la ventana al cerrar el cliente; monitor, encoder y auxiliar retirados, dispositivos físicos conservados. Queda una comparación A/B controlada con WGC; aún no se acredita una mejora de latencia ni 60 superficies nuevas por segundo. Quedan medir codificación dentro del IDD, decidir el IPC definitivo, encoder GPU, servicio/inicio automático del controlador, suspensión, bloqueo y cambio de usuario. El hito completo sigue abierto.
+Estado actual (2026-09-10): el [driver C++ x64](driver/windows-idd/README.md) 0.1.0.9 crea el monitor virtual durante la sesión y entrega frames al host mediante la ruta CPU. El panel inicia el broker elevado y el host con `--driver-h264`; al ejecutar el host sin argumentos se selecciona la misma ruta. Las variantes WGC se conservan bajo `diag`. Esta consolidación no cambia la DLL ni requiere reinstalar el driver.
+
+Se ha comprobado con el cliente anterior de la Deck la activación y retirada del monitor, el cierre del cliente y del host, la recuperación de desconexiones y pruebas de suspensión y bloqueo documentadas. También existen probes de transferencia CPU y D3D11; sus cifras no equivalen a una validación del vídeo GPU completo. El historial y las incidencias intermedias se conservan en [docs/testing.md](docs/testing.md) y [docs/continuation.md](docs/continuation.md).
+
+El hito sigue abierto: faltan la comparación integrada CPU/GPU y la decisión final de IPC, pruebas de cambio de usuario y varias GPU, la consolidación del broker y la firma e instalación distribuible del driver. El encoder permanece en el host según el [ADR 0017](docs/adr/0017-media-packaging.md).
 
 Tareas:
 
@@ -473,7 +487,7 @@ Tareas:
 - Crear el adaptador y monitor `WindowDeck Display`.
 - Anunciar 1280 × 800 a 60 Hz.
 - Implementar conexión y desconexión controlada.
-- Probar los tres modelos de IPC descritos anteriormente.
+- Comparar las rutas CPU y D3D11 completas, con la codificación en el host, y cerrar la decisión de IPC mediante un ADR.
 - Integrar el flujo de frames con el encoder.
 - Manejar suspensión, bloqueo, cambio de usuario y reinicio del host.
 - Documentar instalación y desinstalación segura.
@@ -544,6 +558,8 @@ Criterios de aceptación:
 ### Hito 7 — Empaquetado y primera publicación
 
 Objetivo: publicar una versión reproducible para pruebas externas.
+
+Estado actual (2026-09-10): CI genera Flatpak y hay un script para crear el ZIP de Windows con ejecutables, FFmpeg, bibliotecas nativas, licencias, hashes y fuentes. El ZIP prepara su propio entorno multimedia y no requiere un FFmpeg instalado globalmente. Siguen pendientes la prueba en un Windows limpio, el instalador y distribución del driver, las actualizaciones y la primera publicación dirigida a usuarios externos. El [ADR 0017](docs/adr/0017-media-packaging.md) describe el límite entre el empaquetado existente y ese trabajo pendiente.
 
 Tareas:
 

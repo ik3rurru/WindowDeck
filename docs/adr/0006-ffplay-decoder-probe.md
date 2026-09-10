@@ -1,5 +1,7 @@
 # ADR 0006: reproducción inicial con FFplay
 
+> Actualización de consolidación (2026-09-10): FFplay sigue siendo el decoder de la ruta CPU soportada. El cliente multimedia nativo es experimental. Véanse los [ADR 0016](0016-supported-video-routes.md) y [0017](0017-media-packaging.md); el contenido siguiente documenta la prueba original.
+
 - Estado: sustituido por ADR 0007
 - Fecha: 2026-09-04
 

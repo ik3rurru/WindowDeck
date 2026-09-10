@@ -17,20 +17,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-media.ps1 -Dow
 powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/build.ps1
 ```
 
-Abrir después `WindowDeck.vbs`. El lanzador utiliza `target/release`, detecta
-la integración nativa y recibe estados del host. Detener solicita el cierre de
+Abrir después `WindowDeck.vbs`. El lanzador utiliza `target/release`, selecciona
+CPU por defecto y recibe estados del host. Detener solicita el cierre de
 la sesión y la liberación del monitor; matar el proceso queda como respaldo si
 no termina en ocho segundos. El controlador elevado conserva el monitor solo
 mientras existe una concesión del host.
 
-El lanzador mantiene disponibles los brokers GPU y CPU para negociar con clientes
-anteriores. Si la Deck solo admite MPEG-TS, el host selecciona la ruta CPU anterior.
-Para forzarla: `powershell -ExecutionPolicy Bypass -File scripts/WindowDeck.ps1 -Legacy`.
+El lanzador normal utiliza el broker CPU. Para el experimento GPU se ejecuta
+`powershell -ExecutionPolicy Bypass -File scripts/WindowDeck.ps1 -Native`;
+solo ese modo mantiene ambos brokers para negociar también con clientes anteriores.
+Si la Deck solo admite MPEG-TS, el host experimental selecciona el respaldo CPU.
+El antiguo switch `-Legacy` se sustituye por abrir el panel sin switches.
 La corrección de las desconexiones al arrancar está en el host: no requiere
 reinstalar el Flatpak 0.1.0 que ya tiene la Deck. La prueba real del
 10 de septiembre está documentada en `docs/testing.md`.
 
-Lanzamiento nativo manual: iniciar `windowdeck-display.exe --gpu-frame-broker`
+Lanzamiento nativo manual (experimental): iniciar `windowdeck-display.exe --gpu-frame-broker`
 como administrador y `windowdeck-host.exe --driver-native-h264 0.0.0.0:48150`
 sin elevar. Iniciar también `--frame-broker` si se admitirán clientes anteriores.
 
@@ -109,8 +111,8 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 target/release/windowdeck-client.exe --media-self-test
 python scripts/test-native-client.py --client target/release/windowdeck-client.exe
-target/release/windowdeck-host.exe --gpu-self-test auto
-target/release/windowdeck-host.exe --gpu-self-test libx264
+target/release/windowdeck-host.exe diag gpu-encode auto
+target/release/windowdeck-host.exe diag gpu-encode libx264
 ```
 
 Los ensayos multimedia generan contenido conocido sin capturar el escritorio.

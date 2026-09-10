@@ -36,7 +36,9 @@ acceso directo en el modo escritorio de la Deck.
 Validacion: analisis sintactico PowerShell sin errores. Pendiente comprobar
 interactivamente el ciclo completo Iniciar/conectar/Detener con la Deck.
 
-Version 0.2.0: el panel usa la integracion multimedia si esta compilada. Mantiene
-ambos brokers para aceptar tambien clientes antiguos. `-Legacy` fuerza CPU y
-FFplay. No consulta `Get-NetTCPConnection`; los estados proceden del host.
+Consolidacion de 0.2.0: el panel usa CPU/libx264 por defecto, incluso si se compila
+la integracion multimedia. `-Native` selecciona expresamente la ruta GPU experimental
+y exige `native-media`; en ese modo mantiene ambos brokers para aceptar tambien
+clientes antiguos. Se retira `-Legacy`: abrir el panel sin switches utiliza CPU.
+No consulta `Get-NetTCPConnection`; los estados proceden del host.
 Vease [implementacion, pruebas y limites](mejoras-implementadas.md).

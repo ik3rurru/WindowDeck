@@ -2,7 +2,7 @@
 
 Primer paso del hito 4, independiente del host y del cliente Rust. Adaptación del [ejemplo oficial IndirectDisplay](https://github.com/microsoft/Windows-driver-samples/tree/d5569c08aa2818c6240744bb47a00f67f20fdb54/video/IndirectDisplay), fijado al commit `d5569c08aa2818c6240744bb47a00f67f20fdb54`.
 
-El código declara un adaptador `WindowDeck Display`, un monitor con nombre EDID `WindowDeck` y un único modo de 1280 × 800 a 60 Hz. El campo de nombre del EDID está limitado a 13 caracteres. El worker D3D11 consume y libera las superficies. El host puede recapturar ese escritorio con WGC o codificar sus frames CPU directos mediante el modo experimental `--driver-h264`, como se explica en el [README principal](../../README.md). Se conservan los ajustes de calidad H.264 existentes.
+El código declara un adaptador `WindowDeck Display`, un monitor con nombre EDID `WindowDeck` y un único modo de 1280 × 800 a 60 Hz. El campo de nombre del EDID está limitado a 13 caracteres. El worker D3D11 consume y libera las superficies. El host codifica sus frames CPU directos mediante la ruta recomendada `--driver-h264`, como se explica en el [README principal](../../README.md). La recaptura WGC se conserva como diagnóstico. Se mantienen los ajustes de calidad H.264 existentes.
 
 Estado local (2026-09-06): **escritorio extendido activo a 1280 × 800 y 60 Hz** con la versión 0.1.0.7 (`oem99.inf`). Se comprobaron 45 segundos de actividad y 556 superficies con estadísticas aceptadas, una segunda instancia rechazada y diez ciclos de activación/retirada normal. La pantalla física se conserva. Esto valida el modo activo y la recepción de imágenes, no un flujo sostenido de 60 frames nuevos por segundo ni el vídeo en la Deck.
 
@@ -44,7 +44,7 @@ Para repetir únicamente la autoprueba, sin privilegios de administrador ni driv
 ./target/windows-idd/windowdeck-display.exe --self-test
 ```
 
-Comprueba checksum y timing preferido del EDID, correspondencia con los modos anunciados a Windows y propagación de éxito/error del callback de creación. No crea ningún dispositivo. El build del driver ejecuta también las comprobaciones WDK del INF, APIs y catálogo. El CI Rust existente no compila aún este prototipo C++.
+Comprueba checksum y timing preferido del EDID, correspondencia con los modos anunciados a Windows y propagación de éxito/error del callback de creación. No crea ningún dispositivo. El build del driver ejecuta también las comprobaciones WDK del INF, APIs y catálogo. CI compila el auxiliar C++ con `-ControlOnly` en Windows; la DLL IddCx y su aceptación requieren el build WDK y hardware real.
 
 ## Firma e instalación local de pruebas
 
@@ -69,16 +69,34 @@ La utilidad actualizada incorpora `--source`: devuelve únicamente el nombre GDI
 
 ## Prueba manual de aceptación
 
-La [ruta automática](../../docs/adr/0010-automatic-display-lifetime.md) usa `windowdeck-display --broker` como administrador y `windowdeck-host --auto-virtual-h264` sin elevar. El broker permanece sin pantalla hasta recibir una sesión y la retira al liberarse esa sesión. Mantén el broker abierto; no ejecutes `--run` a la vez. Recompilar la utilidad basta: no hay que reinstalar el driver.
+La ruta recomendada usa `windowdeck-display --frame-broker` como administrador y
+`windowdeck-host --driver-h264` sin elevar. El broker permanece sin pantalla hasta
+recibir una sesión y la retira al liberarse. Mantén el broker abierto; no ejecutes
+`--run` a la vez. El panel administra estos procesos automáticamente.
+La [referencia WGC](../../docs/adr/0010-automatic-display-lifetime.md) se conserva
+como `windowdeck-host diag auto-virtual-h264`, con el broker `--broker`.
+Véase la [guía de desarrollo](../../docs/development.md). La consolidación de CLI
+no requiere recompilar ni reinstalar la DLL del driver.
 
-Con el broker ya abierto en el mismo inicio de sesión, estas pruebas verifican ciclos y salidas del host, respectivamente:
+Para verificar salidas y reconexiones de la ruta CPU, mantener `--frame-broker`
+abierto en el mismo inicio de sesión y ejecutar:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/test-auto-host.ps1 -DriverCpu
+```
+
+Las pruebas históricas de concesiones y del host WGC requieren el broker `--broker`
+en lugar del broker CPU. Ejecutarlas por separado, tras cerrar el anterior:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/test-auto-display.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/test-auto-host.ps1
 ```
 
-Ejecutarlas sin una sesión de vídeo activa: crean y retiran pantallas de prueba. La segunda requiere el host de `target/debug` compilado, FFmpeg en `PATH` y el puerto loopback 48151 libre. Cierra exclusivamente sus procesos propios y conserva registros bajo `target/`.
+Ejecutar estos arneses sin una sesión de vídeo activa: crean y retiran pantallas
+de prueba. `test-auto-host.ps1`, en ambos modos, requiere el host de `target/debug`
+compilado, FFmpeg en `PATH` y el puerto loopback 48151 libre. Cierra exclusivamente
+sus procesos propios y conserva registros bajo `target/`.
 
 Para comprobar diez ciclos de creación, escritorio activo y retirada normal, con la utilidad cerrada y en una terminal elevada:
 
@@ -92,10 +110,10 @@ Con el paquete firmado e instalado:
 
 1. Anotar las pantallas activas antes de ejecutar `--run`.
 2. Confirmar un único monitor adicional, 1280 × 800 a 60 Hz, y ausencia de errores en el Administrador de dispositivos.
-3. Extender el escritorio y mover una ventana de prueba al monitor virtual. Esta iteración no permite verla en la Deck; recuperarla con `Win+Mayús+Flecha` si hace falta.
+3. Extender el escritorio y mover una ventana de prueba al monitor virtual. Esta prueba aislada del controlador no transmite vídeo a la Deck; recuperarla con `Win+Mayús+Flecha` si hace falta.
 4. Pulsar X y comprobar que el monitor adicional desaparece sin retirar los monitores físicos.
 5. Repetir diez ciclos de activación/retirada; comprobar también cerrar el proceso y arrancar una segunda instancia mientras la primera sigue abierta. No debe aparecer un segundo monitor virtual.
-6. Registrar tiempos, errores PnP y cualquier ventana inaccesible. Suspensión, bloqueo y cambio de usuario necesitan pruebas posteriores; no se consideran validados.
+6. Registrar tiempos, errores PnP y cualquier ventana inaccesible. Esta prueba aislada no valida suspensión, bloqueo ni cambio de usuario. Las pruebas posteriores de la ruta CPU y sus límites están en [testing.md](../../docs/testing.md); el cambio de usuario sigue pendiente.
 
 ## Desinstalar únicamente este prototipo
 

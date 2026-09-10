@@ -1,5 +1,7 @@
 # Descubrimiento LAN de WindowDeck
 
+> Actualización de consolidación (2026-09-10): el cliente 0.2 mantiene el descubrimiento mDNS entre intentos e inicia la conexión al recibir un candidato, sin repetir la espera inicial. La identidad anunciada no autentica al host. Véase [Mejoras implementadas](../mejoras-implementadas.md); los tiempos siguientes corresponden al comportamiento original.
+
 El host anuncia `_windowdeck._tcp.local.` mediante mdns-sd. El servicio contiene
 el puerto TCP real y propiedades `version=1`, `codec` y `name`. Las interfaces
 se revisan cada dos segundos. Una direccion de escucha explicita solo anuncia

@@ -1,5 +1,7 @@
 # ADR 0010: monitor virtual con vida ligada a la sesión
 
+> Actualización de consolidación (2026-09-10): la gestión del ciclo de vida del monitor se mantiene en la ruta CPU soportada. La variante WGC de este ADR se conserva con `windowdeck-host diag auto-virtual-h264`. Véase el [ADR 0016](0016-supported-video-routes.md); los comandos y medidas originales se conservan como historial.
+
 - Fecha: 2026-09-07
 - Estado: implementado; ciclos locales, fallos del host y dos conexiones reales de la Deck comprobados.
 

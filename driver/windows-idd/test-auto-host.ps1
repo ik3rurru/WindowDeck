@@ -62,7 +62,7 @@ try {
     foreach ($scenario in @('encoder-missing', 'disconnect-reconnect', 'host-terminated')) {
         $info = New-Object Diagnostics.ProcessStartInfo
         $info.FileName = $hostExe
-        $mode = if ($DriverCpu) { '--driver-h264' } else { '--auto-virtual-h264' }
+        $mode = if ($DriverCpu) { '--driver-h264' } else { 'diag auto-virtual-h264' }
         $info.Arguments = "$mode 127.0.0.1:$Port"
         $info.UseShellExecute = $false
         $info.CreateNoWindow = $true

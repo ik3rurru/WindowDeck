@@ -30,7 +30,7 @@ function Wait-Inactive {
 if ((Display-Code) -ne 4) { throw 'Close the active display before the frame probe' }
 $physical = @(Get-PnpDevice -PresentOnly | Where-Object { $_.Class -in @('Display','Monitor') } | Select-Object -ExpandProperty InstanceId)
 $probe = $null
-$probeMode = if ($Gpu) { '--gpu-frame-test' } else { '--driver-frame-test' }
+$probeMode = if ($Gpu) { 'diag gpu-frames' } else { 'diag driver-frames' }
 try {
     foreach ($cycle in 1..3) {
         $probe = Start-Process -FilePath $hostExe -ArgumentList $probeMode -WindowStyle Hidden -RedirectStandardOutput (Join-Path $evidence "probe-$cycle.stdout.log") -RedirectStandardError (Join-Path $evidence "probe-$cycle.log") -PassThru

@@ -10,6 +10,7 @@ use windowdeck_protocol::{
 
 #[cfg(windows)]
 mod capture;
+mod cli;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 const DEFAULT_ADDRESS: &str = "0.0.0.0:48150";
@@ -45,12 +46,19 @@ fn main() {
 }
 
 fn run() -> Result<(), AnyError> {
-    #[cfg(all(windows, feature = "native-media"))]
-    if env::args().nth(1).as_deref() == Some("--gpu-self-test") {
-        windowdeck_media::gpu_self_test(&env::args().nth(2).unwrap_or_else(|| "auto".into()))?;
+    let mode = cli::parse_mode(env::args().skip(1))?;
+    if matches!(mode, Mode::Help | Mode::DiagHelp) {
+        println!(
+            "{}",
+            if mode == Mode::Help {
+                cli::HELP
+            } else {
+                cli::DIAG_HELP
+            }
+        );
         return Ok(());
     }
-    if env::args().nth(1).as_deref() == Some("--version") {
+    if mode == Mode::Version {
         println!(
             "windowdeck-host {} protocol={} profile={}",
             env!("CARGO_PKG_VERSION"),
@@ -81,7 +89,7 @@ fn run() -> Result<(), AnyError> {
             ),
         ],
     );
-    match parse_mode(env::args().skip(1))? {
+    match mode {
         Mode::Serve {
             address,
             monitor,
@@ -91,11 +99,16 @@ fn run() -> Result<(), AnyError> {
         Mode::EncodeTest(index) => encode_test(index),
         Mode::DriverFrameTest => driver_frame_test(false),
         Mode::GpuFrameTest => driver_frame_test(true),
+        Mode::GpuEncodeTest(encoder) => gpu_encode_test(&encoder),
+        Mode::Help | Mode::DiagHelp | Mode::Version => unreachable!(),
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
+    Help,
+    DiagHelp,
+    Version,
     Serve {
         address: String,
         monitor: Option<CaptureTarget>,
@@ -105,6 +118,7 @@ enum Mode {
     EncodeTest(usize),
     DriverFrameTest,
     GpuFrameTest,
+    GpuEncodeTest(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,99 +130,20 @@ enum CaptureTarget {
     WindowDeckNative,
 }
 
-fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, &'static str> {
-    let mut args = args.into_iter();
-    match args.next().as_deref() {
-        Some(command @ ("--driver-frame-test" | "--gpu-frame-test")) => {
-            if args.next().is_some() {
-                return Err("usa --driver-frame-test o --gpu-frame-test sin argumentos");
-            }
-            Ok(if command == "--gpu-frame-test" {
-                Mode::GpuFrameTest
-            } else {
-                Mode::DriverFrameTest
-            })
-        }
-        Some(
-            command @ ("--virtual-h264"
-            | "--auto-virtual-h264"
-            | "--driver-h264"
-            | "--driver-native-h264"),
-        ) => {
-            let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
-            if args.next().is_some() || address.starts_with('-') {
-                return Err("usa --virtual-h264, --auto-virtual-h264 o --driver-h264 [DIRECCIÓN]");
-            }
-            Ok(Mode::Serve {
-                address,
-                monitor: Some(if command == "--driver-native-h264" {
-                    CaptureTarget::WindowDeckNative
-                } else if command == "--driver-h264" {
-                    CaptureTarget::WindowDeckCpu
-                } else if command == "--auto-virtual-h264" {
-                    CaptureTarget::WindowDeckAuto
-                } else {
-                    CaptureTarget::WindowDeck
-                }),
-                codec: if command == "--driver-native-h264" {
-                    VideoCodec::H264Frames
-                } else {
-                    VideoCodec::H264
-                },
-            })
-        }
-        Some(command @ ("--capture-test" | "--encode-test")) => {
-            let index = args
-                .next()
-                .map(|value| value.parse().map_err(|_| "índice de monitor inválido"))
-                .transpose()?
-                .unwrap_or(1);
-            if index == 0 || args.next().is_some() {
-                return Err("usa --capture-test [N] o --encode-test [N], con N mayor que cero");
-            }
-            Ok(if command == "--capture-test" {
-                Mode::CaptureTest(index)
-            } else {
-                Mode::EncodeTest(index)
-            })
-        }
-        Some(command @ ("--capture" | "--h264")) => {
-            let index = args
-                .next()
-                .ok_or("falta el índice de monitor")?
-                .parse()
-                .map_err(|_| "índice de monitor inválido")?;
-            let address = args.next().unwrap_or_else(|| DEFAULT_ADDRESS.into());
-            if index == 0 || args.next().is_some() {
-                return Err("usa --capture N [DIRECCIÓN] o --h264 N [DIRECCIÓN]");
-            }
-            Ok(Mode::Serve {
-                address,
-                monitor: Some(CaptureTarget::Monitor(index)),
-                codec: if command == "--h264" {
-                    VideoCodec::H264
-                } else {
-                    VideoCodec::Rgb332
-                },
-            })
-        }
-        Some(value) if value.starts_with('-') => Err("opción desconocida"),
-        address => {
-            if args.next().is_some() {
-                return Err("solo se admite una dirección");
-            }
-            Ok(Mode::Serve {
-                address: address.unwrap_or(DEFAULT_ADDRESS).into(),
-                monitor: None,
-                codec: VideoCodec::Rgb332,
-            })
-        }
-    }
-}
-
 #[cfg(windows)]
 fn driver_frame_test(gpu: bool) -> Result<(), AnyError> {
     capture::probe_driver_frames(gpu)
+}
+
+#[cfg(all(windows, feature = "native-media"))]
+fn gpu_encode_test(encoder: &str) -> Result<(), AnyError> {
+    windowdeck_media::gpu_self_test(encoder)?;
+    Ok(())
+}
+
+#[cfg(not(all(windows, feature = "native-media")))]
+fn gpu_encode_test(_encoder: &str) -> Result<(), AnyError> {
+    Err("diag gpu-encode requiere Windows y una compilacion con native-media".into())
 }
 
 #[cfg(not(windows))]
@@ -556,53 +491,6 @@ mod tests {
         assert_ne!(first, pattern(1, 1_000));
     }
 
-    #[test]
-    fn mode_accepts_server_address_or_capture_monitor() {
-        assert_eq!(
-            parse_mode(["--driver-frame-test".into()]),
-            Ok(Mode::DriverFrameTest)
-        );
-        assert_eq!(
-            parse_mode(["--gpu-frame-test".into()]),
-            Ok(Mode::GpuFrameTest)
-        );
-        assert!(parse_mode(["--gpu-frame-test".into(), "extra".into()]).is_err());
-        assert_eq!(
-            parse_mode(Vec::new()),
-            Ok(Mode::Serve {
-                address: DEFAULT_ADDRESS.into(),
-                monitor: None,
-                codec: VideoCodec::Rgb332,
-            })
-        );
-        assert_eq!(
-            parse_mode(["--capture-test".into(), "2".into()]),
-            Ok(Mode::CaptureTest(2))
-        );
-        assert_eq!(
-            parse_mode(["--encode-test".into()]),
-            Ok(Mode::EncodeTest(1))
-        );
-        assert_eq!(
-            parse_mode(["--capture".into(), "2".into(), "127.0.0.1:9".into()]),
-            Ok(Mode::Serve {
-                address: "127.0.0.1:9".into(),
-                monitor: Some(CaptureTarget::Monitor(2)),
-                codec: VideoCodec::Rgb332,
-            })
-        );
-        assert_eq!(
-            parse_mode(["--h264".into(), "1".into()]),
-            Ok(Mode::Serve {
-                address: DEFAULT_ADDRESS.into(),
-                monitor: Some(CaptureTarget::Monitor(1)),
-                codec: VideoCodec::H264,
-            })
-        );
-        assert!(parse_mode(["--capture-test".into(), "0".into()]).is_err());
-        assert!(parse_mode(["--unknown".into()]).is_err());
-    }
-
     #[cfg(windows)]
     #[test]
     fn automatic_display_requires_compatible_negotiation() {
@@ -658,57 +546,5 @@ mod tests {
             let error = server.join().unwrap();
             assert_eq!(error, "el cliente no admite la configuración solicitada");
         }
-    }
-
-    #[test]
-    fn virtual_mode_is_explicit_and_rejects_extra_arguments() {
-        assert_eq!(
-            parse_mode(["--driver-native-h264".into()]),
-            Ok(Mode::Serve {
-                address: DEFAULT_ADDRESS.into(),
-                monitor: Some(CaptureTarget::WindowDeckNative),
-                codec: VideoCodec::H264Frames,
-            })
-        );
-        assert_eq!(
-            parse_mode(["--driver-h264".into()]),
-            Ok(Mode::Serve {
-                address: DEFAULT_ADDRESS.into(),
-                monitor: Some(CaptureTarget::WindowDeckCpu),
-                codec: VideoCodec::H264,
-            })
-        );
-        assert!(parse_mode(["--driver-h264".into(), "--unknown".into()]).is_err());
-        assert!(
-            parse_mode(["--driver-h264".into(), "127.0.0.1:9".into(), "extra".into()]).is_err()
-        );
-        assert_eq!(
-            parse_mode(["--auto-virtual-h264".into()]),
-            Ok(Mode::Serve {
-                address: DEFAULT_ADDRESS.into(),
-                monitor: Some(CaptureTarget::WindowDeckAuto),
-                codec: VideoCodec::H264,
-            })
-        );
-        assert!(parse_mode(["--auto-virtual-h264".into(), "--unknown".into()]).is_err());
-        for address in [DEFAULT_ADDRESS, "127.0.0.1:48151"] {
-            assert_eq!(
-                parse_mode(["--virtual-h264".into(), address.into()]),
-                Ok(Mode::Serve {
-                    address: address.into(),
-                    monitor: Some(CaptureTarget::WindowDeck),
-                    codec: VideoCodec::H264,
-                })
-            );
-        }
-        assert!(parse_mode(["--virtual-h264".into(), "--h264".into()]).is_err());
-        assert!(
-            parse_mode([
-                "--virtual-h264".into(),
-                "127.0.0.1:48151".into(),
-                "2".into()
-            ])
-            .is_err()
-        );
     }
 }

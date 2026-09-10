@@ -1,5 +1,7 @@
 # ADR 0009: enviar el escritorio virtual mediante Windows Graphics Capture
 
+> Actualización de consolidación (2026-09-10): esta ruta WGC manual queda congelada bajo `windowdeck-host diag virtual-h264`. La ruta CPU del driver es la predeterminada según el [ADR 0016](0016-supported-video-routes.md). Los comandos y las mediciones siguientes corresponden al prototipo original.
+
 - Estado: puente provisional implementado; recepción, desconexión abrupta, nueva conexión y retirada durante vídeo con recuperación de una ventana confirmadas; latencia notable y otras pruebas de fallos pendientes.
 - Fecha: 2026-09-06
 

@@ -1,5 +1,7 @@
 # ADR 0007: emisión H.264 continua
 
+> Actualización de consolidación (2026-09-10): la captura física se conserva como diagnóstico con `windowdeck-host diag h264-stream`. El arranque normal usa el driver y el encoder CPU; las rutas y el empaquetado actuales están en los [ADR 0016](0016-supported-video-routes.md) y [0017](0017-media-packaging.md). Los comandos y medidas siguientes son históricos.
+
 - Estado: aceptado
 - Fecha: 2026-09-04
 

@@ -1,5 +1,7 @@
 # ADR 0013 — Frames CPU del driver como entrada de H.264
 
+> Actualización de consolidación (2026-09-10): esta ruta es ahora la predeterminada según el [ADR 0016](0016-supported-video-routes.md). El host actual selecciona el frame más reciente y la cola de MPEG-TS conserva dos chunks, con tolerancia de bloqueo de 10 segundos para el cliente anterior. Los tamaños y tiempos del texto siguiente documentan la implementación original.
+
 Fecha: 2026-09-08. Estado: experimental; validado localmente y visualmente en la Deck el 8 de septiembre de 2026.
 
 ## Decisión

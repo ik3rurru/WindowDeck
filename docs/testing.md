@@ -52,7 +52,7 @@ Compilar el código actual en ambos equipos, o instalar en la Deck un Flatpak co
 En Windows, mantener este host durante ambas pruebas:
 
 ```powershell
-cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150 2>&1 | Tee-Object -FilePath host-comparison.log
+cargo run -p windowdeck-host -- diag h264-stream 1 0.0.0.0:48150 2>&1 | Tee-Object -FilePath host-comparison.log
 ```
 
 En la Deck, ejecutar A durante al menos dos minutos y cerrar su ventana antes de iniciar B:
@@ -264,7 +264,7 @@ También pasan compilación/análisis WDK/catálogo/autoprueba, 19 tests Rust, f
 
 ## Repetir en dos equipos
 
-1. Ejecutar el host con `cargo run -p windowdeck-host -- --h264 1 0.0.0.0:48150`.
+1. Ejecutar el host con `cargo run -p windowdeck-host -- diag h264-stream 1 0.0.0.0:48150` para repetir esta referencia histórica de captura física. Para uso normal, seguir la ruta CPU de [development.md](development.md).
 2. Ejecutar el cliente con `cargo run -p windowdeck-client -- IP_DEL_PC:48150 --h264-test --fullscreen`.
 3. Mantener la sesión al menos 30 segundos y conservar los eventos `h264_encoder_metrics`, `h264_send_metrics` y `h264_receive_metrics`.
 4. Repetir por Ethernet y Wi-Fi sin cambiar resolución, FPS ni contenido.
@@ -387,3 +387,34 @@ copiados de la Deck. SHA256 del host corregido:
 `DA362C48232621AD9D75DBF305FFF68EDFC08FBBA2100B210CAA855A51C8513D`.
 Esta prueba valida la compatibilidad CPU con el cliente instalado; no acredita
 la nueva ruta multimedia nativa en la Deck ni mide la latencia visual.
+
+## Consolidación de rutas y CLI — 10 de septiembre de 2026
+
+El host sin argumentos y el panel seleccionan la ruta CPU H.264. La ruta nativa
+se activa explícitamente; pruebas puntuales y referencias históricas se ejecutan
+bajo `diag`. Se conservan el código de captura, protocolo, perfiles de vídeo y
+la corrección de diez segundos de la sección anterior. La tabla de migración
+está en [development.md](development.md).
+
+Validación local en Windows:
+
+- Formato y Clippy sin errores, tanto en la configuración base como con
+  `--all-features`.
+- 32 pruebas correctas en cada configuración; una prueba de descubrimiento por
+  multicast queda excluida porque requiere LAN. Incluyen selección de CPU por
+  defecto, conservación de captura/códec en las rutas históricas y rechazo de
+  flags retirados o argumentos inválidos. La prueba del ejecutable comprueba
+  que ayudas, versión y errores terminan sin iniciar el servidor.
+- Análisis sintáctico correcto de los cuatro scripts PowerShell modificados:
+  panel, empaquetado y arneses de frames y ciclo de vida.
+- Compilación release con `scripts/build-media.ps1` y autoprueba multimedia
+  correctas: 18 frames y tres reinicios de decoder, con contenido verificado.
+- `windowdeck-host diag gpu-encode auto` ejecuta el diagnóstico integrado nuevo:
+  seleccionó `h264_amf`, codificó 120 frames sintéticos en 1.994 segundos y
+  verificó su contenido. No captura el escritorio ni transmite a la Deck.
+
+SHA256 del nuevo host release:
+`AC2C53F2D945A861CA3980B76639E4E65C9A3F8B5D74E93D0D3D8A30B82FE99A`.
+Esta entrega no reinstala el driver ni repite los ensayos físicos del cliente
+de la Deck. Permanecen pendientes la ruta GPU completa, la sesión prolongada,
+el ciclo interactivo del panel y la instalación en un Windows limpio.
