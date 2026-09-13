@@ -51,7 +51,8 @@ jobs:
           "$env:WINDOWDECK_SDL_DIR/lib/x64" >> $env:GITHUB_PATH
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
-      - run: cargo test --locked -p windowdeck-host --all-features cpu_encoder_output_decodes_after_fragmented_transport -- --ignored
+      - run: cargo test --locked -p windowdeck-host --all-features cpu_encoder_output_decodes_after_fragmented_transport -- --ignored --nocapture
+        timeout-minutes: 3
       - run: cargo run --locked -p windowdeck-client --features native-media -- --media-self-test
       - if: runner.os == 'Linux'
         run: python3 scripts/test-native-client.py --client target/debug/windowdeck-client

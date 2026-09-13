@@ -210,11 +210,15 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
                     ui.address.set_text(&addresses);
                 }
                 ui.tick();
-                if let Some(path) = &smoke
-                    && smoke_started.elapsed() >= Duration::from_secs(2)
-                {
-                    let _ = fs::write(path.join("closed.txt"), "normal_close=true\n");
-                    ui.window.close();
+                if let Some(path) = &smoke {
+                    if path.join("close.request").is_file() {
+                        let _ = fs::write(path.join("closed.txt"), "normal_close=true\n");
+                        ui.window.close();
+                    } else if smoke_started.elapsed() >= Duration::from_secs(60) {
+                        // Bound abandoned smoke runs, but do not report them as success.
+                        let _ = fs::write(path.join("timeout.txt"), "inspection_timeout=true\n");
+                        ui.window.close();
+                    }
                 }
             }
             _ => {}

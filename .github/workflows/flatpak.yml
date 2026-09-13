@@ -38,7 +38,10 @@ jobs:
           artifact-name: WindowDeck-flatpak
       - name: Package Steam Deck installer
         id: installer
-        run: echo "archive=$(bash scripts/package-steamdeck.sh)" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          archive=$(bash scripts/package-steamdeck.sh)
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: WindowDeck-steamdeck

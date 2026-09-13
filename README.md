@@ -36,7 +36,7 @@ se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
 El host negocia vídeo con el reproductor integrado; los clientes anteriores
 siguen siendo compatibles mediante MPEG-TS. En la Deck, extrae el paquete
-`WindowDeck-0.2.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+`WindowDeck-0.2.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
 bash install-steamdeck.sh

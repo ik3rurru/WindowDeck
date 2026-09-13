@@ -22,8 +22,12 @@ ZIP Windows extraído con PATH acotado. Los siete casos del instalador pasan
 en la Deck con perfiles temporales, sin cambiar su Flatpak. Detalle en
 [testing.md](testing.md#distribución--13-de-septiembre-de-2026).
 
-Publicación preparada como `v0.2.0` preliminar; falta confirmar el resultado
-remoto del workflow y sus descargas. No confundir ese paso con instalación
+Publicación preparada como `v0.2.1` preliminar; falta confirmar el resultado
+remoto del workflow y sus descargas. El intento `v0.2.0` generó Windows y Flatpak,
+pero no publicó la release: la captura del panel coincidía con el cierre
+automático del modo de prueba, y Git rechazó la propiedad del checkout dentro
+del contenedor. Corregidos mediante cierre solicitado por el arnés y excepción
+de propiedad acotada a esa lectura del repositorio. No confundir ese paso con instalación
 limpia ni aceptación de vídeo en modo juego, todavía pendientes.
 
 ## Historial — 12 de septiembre de 2026

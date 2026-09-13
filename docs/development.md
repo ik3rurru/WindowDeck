@@ -20,7 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 El primer comando obtiene SDK con versión y SHA256 fijados, compila release y
 copia FFmpeg/SDL junto a los binarios. `-Download` solo descarga archivos ausentes.
 El segundo compila el auxiliar y el paquete del driver; no instala la DLL.
-El ZIP queda en `target/package-<identificador>/WindowDeck-0.2.0-windows-x64.zip` e incluye versiones,
+El ZIP queda en `target/package-<identificador>/WindowDeck-0.2.1-windows-x64.zip` e incluye versiones,
 hashes, licencias y fuentes. La validación en un Windows limpio sigue pendiente.
 `scripts/package-windows.ps1 -Release` exige un árbol limpio e incluye las
 fuentes del commit exacto. El empaquetado normal solo necesita compilar el

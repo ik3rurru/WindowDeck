@@ -1,5 +1,6 @@
 ﻿[CmdletBinding()]
-param([string]$Launcher, [string]$EvidenceDirectory, [switch]$Session, [switch]$TerminatePanel)
+param([string]$Launcher, [string]$EvidenceDirectory, [switch]$Session, [switch]$TerminatePanel,
+    [ValidateRange(0, 30000)][int]$InspectionDelayMilliseconds = 0)
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell Start-Process rejects environments containing both spellings.
 $launcherTestPath = $env:Path
@@ -12,6 +13,9 @@ if (!$Launcher) { $Launcher = Join-Path $testRoot 'target/release/windowdeck-lau
 $Launcher = (Resolve-Path -LiteralPath $Launcher).Path
 if (!$EvidenceDirectory) { $EvidenceDirectory = Join-Path $testRoot ('target/launcher-smoke-' + [guid]::NewGuid().ToString('N')) }
 $EvidenceDirectory = [IO.Path]::GetFullPath($EvidenceDirectory)
+if ((Test-Path -LiteralPath $EvidenceDirectory) -and @(Get-ChildItem -LiteralPath $EvidenceDirectory -Force).Count) {
+    throw 'La carpeta de evidencias debe estar vacia para no reutilizar senales de una prueba anterior.'
+}
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -73,6 +77,7 @@ try {
         Start-Sleep -Milliseconds 50
     }
     $panel.Refresh()
+    if ($InspectionDelayMilliseconds) { Start-Sleep -Milliseconds $InspectionDelayMilliseconds }
     $window = [WindowDeckPanelProbe]::FindPanel($panel.Id)
     if ($window -eq [IntPtr]::Zero) { throw 'No se encuentra la ventana del panel.' }
     [void][WindowDeckPanelProbe]::ShowWindow($window, 4)
@@ -140,6 +145,8 @@ try {
             if (!$duplicate.WaitForExit(5000)) { throw 'La segunda instancia no terminó.' }
             if ($duplicate.ExitCode -eq 0) { throw 'La segunda instancia no fue rechazada.' }
         } finally { if (!$duplicate.HasExited) { $duplicate.Kill(); $duplicate.WaitForExit() }; $duplicate.Dispose() }
+        # Ask for normal closure only after inspection and the duplicate-instance check.
+        Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'close.request') -Value 'inspection_complete=true'
     }
     if (!$panel.WaitForExit(10000)) { throw 'El panel no cerró normalmente.' }
     if (!$TerminatePanel -and $panel.ExitCode -ne 0) { throw "El panel terminó con código $($panel.ExitCode)." }

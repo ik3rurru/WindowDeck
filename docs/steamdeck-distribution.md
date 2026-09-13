@@ -7,7 +7,7 @@ se pueda seleccionar desde Steam. Descargas en
 
 ## Instalar y crear el acceso automáticamente
 
-Extraer `WindowDeck-0.2.0-steamdeck-x86_64.tar.gz` y ejecutar en esa carpeta:
+Extraer `WindowDeck-0.2.1-steamdeck-x86_64.tar.gz` y ejecutar en esa carpeta:
 
 ```bash
 bash install-steamdeck.sh

@@ -30,6 +30,16 @@ La instalación limpia de Windows y la sesión visual bajo Gamescope siguen
 pendientes. El empaquetado del Flatpak real y la publicación se comprueban
 mediante el workflow Release; sus resultados no se presuponen en este registro.
 
+El [primer workflow de release](https://github.com/ik3rurru/WindowDeck/actions/runs/34749468739)
+compiló y verificó Windows y Flatpak, además de Rust y multimedia en ambas
+plataformas. No publicó la release: el arnés gráfico encontró el panel cerrado
+por su temporizador de dos segundos; el empaquetador de la Deck encontró una
+propiedad de checkout distinta dentro del contenedor. Se corrigieron ambos
+puntos para 0.2.1. El arnés ahora solicita el cierre al terminar la inspección;
+un límite de 60 segundos cierra pruebas abandonadas sin declararlas correctas.
+Se reprodujo una inspección lenta con una espera deliberada de tres segundos:
+`target/launcher-smoke-5d4b7fb632f34c3d95110d832d727c2c/`, correcta.
+
 ## Línea base H.264 local
 
 Medición del 4 de septiembre de 2026 con host y cliente en el mismo PC Windows, monitor fuente de 2560 × 1440 y salida H.264 de 1280 × 800, 30 FPS y 4 Mbps configurados:

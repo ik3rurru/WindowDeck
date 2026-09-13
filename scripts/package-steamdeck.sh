@@ -13,7 +13,7 @@ mkdir "$stage/$package"
 cp -- "$bundle" "$stage/$package/WindowDeck.flatpak"
 cp -- scripts/install-steamdeck.sh packaging/steamdeck/windowdeck packaging/steamdeck/README.md "$stage/$package/"
 chmod 755 "$stage/$package/install-steamdeck.sh" "$stage/$package/windowdeck"
-git rev-parse HEAD > "$stage/$package/SOURCE_COMMIT.txt"
+git -c safe.directory="$project_root" rev-parse HEAD > "$stage/$package/SOURCE_COMMIT.txt"
 (cd "$stage/$package" && sha256sum WindowDeck.flatpak install-steamdeck.sh windowdeck README.md SOURCE_COMMIT.txt > SHA256SUMS.txt)
 tar -czf "$stage/$package.tar.gz" -C "$stage" "$package"
 printf '%s\n' "$stage/$package.tar.gz"
