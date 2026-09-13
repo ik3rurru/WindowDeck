@@ -6,6 +6,10 @@ pub enum State {
     HostStarting,
     Listening,
     Negotiating,
+    Validating,
+    ValidationFailed,
+    Activating,
+    Unstable,
     Streaming,
     Stopping,
 }
@@ -15,6 +19,10 @@ impl State {
         match line.trim_end() {
             "windowdeck_state=listening" => Some(Self::Listening),
             "windowdeck_state=negotiating" => Some(Self::Negotiating),
+            "windowdeck_state=validating" => Some(Self::Validating),
+            "windowdeck_state=validation_failed" => Some(Self::ValidationFailed),
+            "windowdeck_state=activating" => Some(Self::Activating),
+            "windowdeck_state=unstable" => Some(Self::Unstable),
             "windowdeck_state=streaming" => Some(Self::Streaming),
             _ => None,
         }
@@ -27,6 +35,14 @@ impl State {
             Self::HostStarting => "Iniciando el host...",
             Self::Listening => "Esperando Deck. Abre WindowDeck en la Steam Deck.",
             Self::Negotiating => "Preparando la conexión con la Deck...",
+            Self::Validating => "Comprobando la estabilidad de la conexión...",
+            Self::ValidationFailed => {
+                "La conexión no superó la prueba de estabilidad. Revisa la red y vuelve a abrir el cliente."
+            }
+            Self::Activating => "Conexión preparada. Iniciando la pantalla y el vídeo...",
+            Self::Unstable => {
+                "Se pausaron los reintentos tras tres fallos seguidos. Revisa la red; pulsa Detener e Iniciar para volver a probar."
+            }
             Self::Streaming => "Deck conectada.",
             Self::Stopping => "Deteniendo y recuperando las ventanas...",
         }
@@ -92,6 +108,10 @@ mod tests {
             State::HostStarting,
             State::Listening,
             State::Negotiating,
+            State::Validating,
+            State::ValidationFailed,
+            State::Activating,
+            State::Unstable,
             State::Streaming,
             State::Stopping,
         ] {
@@ -105,6 +125,17 @@ mod tests {
             State::from_host("windowdeck_state=negotiating"),
             Some(State::Negotiating)
         );
+        for (name, state) in [
+            ("validating", State::Validating),
+            ("validation_failed", State::ValidationFailed),
+            ("activating", State::Activating),
+            ("unstable", State::Unstable),
+        ] {
+            assert_eq!(
+                State::from_host(&format!("windowdeck_state={name}")),
+                Some(state)
+            );
+        }
         for line in [
             "connected",
             "log windowdeck_state=streaming",

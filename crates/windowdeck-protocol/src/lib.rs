@@ -47,6 +47,11 @@ pub enum Message {
     Pong {
         nonce: u64,
     },
+    /// Synthetic traffic, negotiated separately from codec support. Never video.
+    ConnectionProbe {
+        nonce: u64,
+        payload: Vec<u8>,
+    },
     Error {
         code: u16,
         message: String,
@@ -168,6 +173,14 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             output.push(7);
             put_u64(&mut output, *nonce);
         }
+        Message::ConnectionProbe { nonce, payload } => {
+            if payload.len() != connection::PROBE_BYTES {
+                return Err(ProtocolError::Invalid("invalid connection probe size"));
+            }
+            output.push(11);
+            put_u64(&mut output, *nonce);
+            output.extend_from_slice(payload);
+        }
         Message::Error { code, message } => {
             output.push(8);
             put_u16(&mut output, *code);
@@ -253,6 +266,15 @@ fn decode(payload: &[u8]) -> Result<Message, ProtocolError> {
         7 => Message::Pong {
             nonce: take_u64(&mut input)?,
         },
+        11 => {
+            let nonce = take_u64(&mut input)?;
+            let mut payload = Vec::new();
+            input.read_to_end(&mut payload)?;
+            if payload.len() != connection::PROBE_BYTES {
+                return Err(ProtocolError::Invalid("invalid connection probe size"));
+            }
+            Message::ConnectionProbe { nonce, payload }
+        }
         8 => Message::Error {
             code: take_u16(&mut input)?,
             message: take_string(&mut input)?,
@@ -382,6 +404,7 @@ fn validate_video_chunk(
 pub enum ConnectionState {
     AwaitingHello,
     Negotiating,
+    Validating,
     Ready,
     Streaming,
     Closed,
@@ -391,6 +414,7 @@ pub enum ConnectionState {
 pub enum ConnectionEvent {
     HelloReceived,
     Negotiated,
+    Validated,
     Started,
     Stopped,
 }
@@ -399,9 +423,12 @@ impl ConnectionState {
     pub fn apply(self, event: ConnectionEvent) -> Result<Self, ProtocolError> {
         match (self, event) {
             (Self::AwaitingHello, ConnectionEvent::HelloReceived) => Ok(Self::Negotiating),
-            (Self::Negotiating, ConnectionEvent::Negotiated) => Ok(Self::Ready),
+            (Self::Negotiating, ConnectionEvent::Negotiated) => Ok(Self::Validating),
+            (Self::Validating, ConnectionEvent::Validated) => Ok(Self::Ready),
             (Self::Ready, ConnectionEvent::Started) => Ok(Self::Streaming),
-            (Self::Ready | Self::Streaming, ConnectionEvent::Stopped) => Ok(Self::Closed),
+            (Self::Validating | Self::Ready | Self::Streaming, ConnectionEvent::Stopped) => {
+                Ok(Self::Closed)
+            }
             _ => Err(ProtocolError::Invalid("unexpected connection event")),
         }
     }
@@ -434,6 +461,10 @@ mod tests {
             Message::Stop,
             Message::Ping { nonce: 7 },
             Message::Pong { nonce: 7 },
+            Message::ConnectionProbe {
+                nonce: 7,
+                payload: vec![0x5a; connection::PROBE_BYTES],
+            },
             Message::Error {
                 code: 1,
                 message: "test".into(),
@@ -504,9 +535,15 @@ mod tests {
         let state = ConnectionState::AwaitingHello
             .apply(ConnectionEvent::HelloReceived)
             .and_then(|state| state.apply(ConnectionEvent::Negotiated))
+            .and_then(|state| state.apply(ConnectionEvent::Validated))
             .and_then(|state| state.apply(ConnectionEvent::Started))
             .expect("valid session flow");
         assert_eq!(state, ConnectionState::Streaming);
+        assert!(
+            ConnectionState::Validating
+                .apply(ConnectionEvent::Started)
+                .is_err()
+        );
         assert!(
             ConnectionState::AwaitingHello
                 .apply(ConnectionEvent::Started)
@@ -514,6 +551,7 @@ mod tests {
         );
     }
 }
+pub mod connection;
 pub mod discovery;
 pub mod queue;
 pub mod video;

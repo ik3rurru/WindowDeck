@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{
-    ConnectionEvent, ConnectionState, Message, ProtocolError, VideoCodec, read_message,
+    ConnectionEvent, ConnectionState, Message, ProtocolError, VideoCodec, connection, read_message,
     write_message,
 };
 use winit::application::ApplicationHandler;
@@ -254,6 +254,7 @@ fn connect_observed(
             },
             max_fps: 60,
             codecs: codec.capability()
+                | connection::CAPABILITY
                 | if codec == VideoCodec::H264Frames {
                     VideoCodec::H264.capability()
                 } else {
@@ -301,11 +302,33 @@ fn connect_observed(
         }
         _ => return Err("se esperaba SessionConfig".into()),
     };
-    match read_message(&mut stream)? {
-        Message::Start => {
-            state.apply(ConnectionEvent::Started)?;
+    let mut validation = connection::ProbeReceiver::new(session_id);
+    let mut validating = false;
+    loop {
+        match read_message(&mut stream)? {
+            Message::Start => {
+                validation.finish()?;
+                state = state.apply(ConnectionEvent::Validated)?;
+                state.apply(ConnectionEvent::Started)?;
+                break;
+            }
+            message @ (Message::ConnectionProbe { .. } | Message::Ping { .. }) => {
+                if !validating {
+                    emit(Level::Info, "connection_validation_started", &[]);
+                    validating = true;
+                }
+                if let Some(reply) = validation.receive(message)? {
+                    write_message(&mut stream, &reply)?;
+                }
+            }
+            Message::Error { code: 2, message } => {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, message).into());
+            }
+            Message::Error { code, message } => {
+                return Err(format!("host error {code}: {message}").into());
+            }
+            _ => return Err("se esperaba validación de conexión o Start".into()),
         }
-        _ => return Err("se esperaba Start".into()),
     }
     Ok((stream, session_id, width, height, actual_codec))
 }
@@ -457,9 +480,11 @@ fn reconnect_h264(
     stopping: &AtomicBool,
     shutdown: &Mutex<TcpStream>,
 ) -> io::Result<()> {
+    let mut retry = connection::RetryBackoff::default();
     loop {
         // Keep the same player and its stdin alive across transport failures. This
         // leaves the window's X available while offline and avoids an EOF/autoexit race.
+        let started = Instant::now();
         let result = forward_h264(&mut stream, &mut input, session_id, stopping);
         if stopping.load(Ordering::Relaxed) {
             return Ok(());
@@ -486,8 +511,15 @@ fn reconnect_h264(
             Err(error) => return Err(error),
         }
         let _ = stream.shutdown(Shutdown::Both);
+        retry.session_ended(started.elapsed());
         loop {
-            let until = Instant::now() + RECONNECT_DELAY;
+            let delay = retry.next_delay();
+            emit(
+                Level::Info,
+                "connection_retry_wait",
+                &[("seconds", &delay.as_secs().to_string())],
+            );
+            let until = Instant::now() + delay;
             while Instant::now() < until {
                 if stopping.load(Ordering::Relaxed) {
                     return Ok(());

@@ -37,12 +37,23 @@ def read(sock, kind):
     return payload[3:]
 
 
-def handshake(sock, session):
+def handshake(sock, session, legacy=False):
     sock.settimeout(10)
     read(sock, 1)
     sock.sendall(message(1, struct.pack(">H", 4) + b"test"))
-    assert read(sock, 2)[-1] & 4, "native access-unit capability missing"
+    capabilities = read(sock, 2)[-1]
+    assert capabilities & 4, "native access-unit capability missing"
     sock.sendall(message(3, struct.pack(">QHHHB", session, 1280, 800, 60, 3)))
+    if not legacy:
+        assert capabilities & 128, "connection validation capability missing"
+        for round in range(8):
+            started = time.monotonic()
+            nonce = session + round
+            for _ in range(8):
+                sock.sendall(message(11, struct.pack(">Q", nonce) + b"\x5a" * 62500))
+            sock.sendall(message(6, struct.pack(">Q", nonce)))
+            assert read(sock, 7) == struct.pack(">Q", nonce), "wrong probe acknowledgement"
+            time.sleep(max(0, .25 - (time.monotonic() - started)))
     sock.sendall(message(4))
 
 
@@ -59,8 +70,26 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--client", required=True)
     parser.add_argument("--ffmpeg", default="ffmpeg")
+    parser.add_argument("--legacy-handshake", action="store_true")
     args = parser.parse_args()
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    # A renderer startup failure must happen before the host can activate a display.
+    with socket.socket() as unopened:
+        unopened.bind(("127.0.0.1", 0))
+        unopened.listen()
+        unopened.settimeout(.2)
+        env = dict(os.environ, SDL_VIDEODRIVER="windowdeck_invalid_driver")
+        failed = subprocess.run([args.client, f"127.0.0.1:{unopened.getsockname()[1]}", "--native"],
+                                env=env, capture_output=True, text=True, timeout=10, **hidden)
+        assert failed.returncode != 0, failed.stderr
+        assert "event=host_connected" not in failed.stderr, failed.stderr
+        try:
+            unexpected, _ = unopened.accept()
+        except socket.timeout:
+            pass
+        else:
+            unexpected.close()
+            raise AssertionError("client connected before its player was ready")
     encoded = subprocess.check_output([
         args.ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x800:rate=60",
         "-frames:v", "12", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
@@ -81,7 +110,7 @@ def main():
                 for session in (10, 20):
                     sock, _ = listener.accept()
                     with sock:
-                        handshake(sock, session)
+                        handshake(sock, session, args.legacy_handshake)
                         for number, frame in enumerate(frames):
                             send_frame(sock, session, number, frame)
                             time.sleep(1 / 60)
@@ -105,7 +134,10 @@ def main():
     assert "native_reconnected" in result.stderr, result.stderr
     assert "native_decode_reset" not in result.stderr, result.stderr
     assert "native_decoder active=" in result.stderr, result.stderr
-    print("PASS: native decoding, fragmented access units, partial-frame disconnect, reconnect and explicit Stop")
+    assert result.stderr.index("native_renderer name=") < result.stderr.index("event=host_connected"), result.stderr
+    if not args.legacy_handshake:
+        assert result.stderr.count("event=connection_validation_started") == 2, result.stderr
+    print("PASS: startup failure without connection, player readiness, validation/legacy handshake, native decoding, partial-frame disconnect, reconnect and Stop")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{
-    ConnectionEvent, ConnectionState, Message, VideoCodec, read_message, write_message,
+    ConnectionEvent, ConnectionState, Message, VideoCodec, connection, read_message, write_message,
 };
 
 #[cfg(any(windows, test))]
@@ -209,6 +209,7 @@ fn run_server(
     publish_state("listening");
 
     listener.set_nonblocking(true)?;
+    let mut health = SessionHealth::default();
     loop {
         if stop_requested() {
             publish_state("stopped");
@@ -229,14 +230,39 @@ fn run_server(
             "client_connected",
             &[("peer", &peer.to_string())],
         );
-        if let Err(error) = serve(stream, monitor, codec) {
+        let result = serve(stream, monitor, codec, &mut health);
+        if let Err(error) = &result {
             emit(
                 Level::Warn,
                 "session_closed",
                 &[("error", &error.to_string())],
             );
         }
-        publish_state("listening");
+        if health.session_ended(
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|error| startup_failure(error.as_ref())),
+        ) {
+            emit(
+                Level::Error,
+                "connection_unstable",
+                &[("reason", "three_short_sessions_failed")],
+            );
+            publish_state("unstable");
+            // Stop the activation loop, including retries by old clients. The panel
+            // remains available so the user can stop and start a fresh attempt.
+            drop(listener);
+            drop(_announcement);
+            while !stop_requested() {
+                thread::sleep(Duration::from_millis(50));
+            }
+            publish_state("stopped");
+            return Ok(());
+        }
+        if !health.validation_failed {
+            publish_state("listening");
+        }
     }
 }
 
@@ -244,7 +270,9 @@ fn serve(
     mut stream: TcpStream,
     mut monitor: Option<CaptureTarget>,
     mut codec: VideoCodec,
+    health: &mut SessionHealth,
 ) -> Result<(), AnyError> {
+    health.validation_failed = false;
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -265,7 +293,7 @@ fn serve(
     )?;
 
     let (width, height, fps) = stream_format(codec, monitor)?;
-    match read_message(&mut stream)? {
+    let validate_connection = match read_message(&mut stream)? {
         Message::Capabilities {
             max_width,
             max_height,
@@ -288,20 +316,12 @@ fn serve(
                 );
             }
             state = state.apply(ConnectionEvent::Negotiated)?;
+            codecs & connection::CAPABILITY != 0
         }
         Message::Capabilities { .. } => {
             return Err("el cliente no admite la configuración solicitada".into());
         }
         _ => return Err("se esperaba Capabilities".into()),
-    }
-
-    // Negotiate first: incomplete or incompatible clients must never create a display.
-    // The lease outlives capture_stream, so its encoder is reaped before monitor removal.
-    #[cfg(windows)]
-    let _display_lease = if monitor == Some(CaptureTarget::WindowDeckAuto) {
-        Some(capture::DisplayLease::acquire()?)
-    } else {
-        None
     };
     let session_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
     write_message(
@@ -314,13 +334,66 @@ fn serve(
             codec,
         },
     )?;
+    if validate_connection {
+        publish_state("validating");
+        emit(Level::Info, "connection_validation_started", &[]);
+        match connection::validate(&mut stream, session_id, stop_requested) {
+            Ok(validation) => emit(
+                Level::Info,
+                "connection_validated",
+                &[
+                    ("elapsed_ms", &validation.elapsed.as_millis().to_string()),
+                    (
+                        "slowest_round_ms",
+                        &validation.slowest_round.as_millis().to_string(),
+                    ),
+                ],
+            ),
+            Err(error) => {
+                health.validation_failed = true;
+                publish_state("validation_failed");
+                emit(
+                    Level::Warn,
+                    "connection_validation_failed",
+                    &[("error", &error.to_string())],
+                );
+                stream.set_write_timeout(Some(Duration::from_millis(250)))?;
+                let _ = write_message(&mut stream, &Message::Error {
+                    code: 2,
+                    message: "La conexión no superó la prueba de estabilidad; no se activó la pantalla. Revisa la red y vuelve a intentarlo.".into(),
+                });
+                return Err(error.into());
+            }
+        }
+    } else {
+        emit(
+            Level::Info,
+            "connection_validation_skipped",
+            &[("reason", "legacy_client")],
+        );
+    }
+    state = state.apply(ConnectionEvent::Validated)?;
+    if stop_requested() {
+        return Ok(());
+    }
+    // No capture helper, encoder or display lease may start before this point.
+    health.activation_started = Some(Instant::now());
+    publish_state("activating");
+    // The lease outlives capture_stream: reap its encoder before monitor removal.
+    #[cfg(windows)]
+    let _display_lease = if monitor == Some(CaptureTarget::WindowDeckAuto) {
+        Some(capture::DisplayLease::acquire()?)
+    } else {
+        None
+    };
     write_message(&mut stream, &Message::Start)?;
     state.apply(ConnectionEvent::Started)?;
-    publish_state("streaming");
 
     if let Some(index) = monitor {
         return capture_stream(stream, index, session_id, codec);
     }
+
+    publish_state("streaming");
 
     let started = Instant::now();
     let mut number = 0_u64;
@@ -359,6 +432,44 @@ fn serve(
         thread::sleep(
             Duration::from_secs_f64(1.0 / f64::from(FPS)).saturating_sub(frame_started.elapsed()),
         );
+    }
+}
+
+#[derive(Default)]
+struct SessionHealth {
+    activation_started: Option<Instant>,
+    short_failures: u8,
+    validation_failed: bool,
+}
+
+fn startup_failure(error: &(dyn Error + 'static)) -> bool {
+    if let Some(windowdeck_protocol::ProtocolError::Io(error)) = error.downcast_ref() {
+        return startup_failure(error);
+    }
+    if let Some(error) = error.downcast_ref::<std::io::Error>() {
+        // Closing the client (including older clients that only close TCP) is not
+        // an unstable startup. Nested I/O errors retain the transport's cause.
+        return match error.kind() {
+            std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted => false,
+            _ => error.get_ref().is_none_or(|cause| startup_failure(cause)),
+        };
+    }
+    true
+}
+
+impl SessionHealth {
+    fn session_ended(&mut self, failed: bool) -> bool {
+        if let Some(started) = self.activation_started.take() {
+            if failed && started.elapsed() < connection::STABLE_SESSION {
+                self.short_failures = self.short_failures.saturating_add(1);
+            } else {
+                self.short_failures = 0;
+            }
+        }
+        self.short_failures >= 3
     }
 }
 
@@ -499,6 +610,115 @@ mod tests {
         assert_ne!(first, pattern(1, 1_000));
     }
 
+    #[test]
+    fn repeated_startup_failures_pause_activation_until_a_new_host_is_started() {
+        let mut health = SessionHealth::default();
+        for attempt in 1..=3 {
+            // Rejected connections do not count as display activation attempts.
+            assert!(!health.session_ended(true));
+            health.activation_started = Some(Instant::now());
+            assert_eq!(health.session_ended(true), attempt == 3);
+        }
+        health.activation_started = Some(Instant::now() - connection::STABLE_SESSION);
+        assert!(!health.session_ended(true));
+        assert_eq!(health.short_failures, 0);
+        health.activation_started = Some(Instant::now());
+        assert!(!health.session_ended(true));
+        health.activation_started = Some(Instant::now());
+        assert!(!health.session_ended(false));
+        assert_eq!(health.short_failures, 0);
+    }
+
+    #[test]
+    fn closing_a_client_does_not_trip_the_startup_failure_limit() {
+        for kind in [
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            let error = std::io::Error::other(windowdeck_protocol::ProtocolError::Io(kind.into()));
+            assert!(!startup_failure(&error));
+        }
+        let timeout = std::io::Error::other(windowdeck_protocol::ProtocolError::Io(
+            std::io::ErrorKind::TimedOut.into(),
+        ));
+        assert!(startup_failure(&timeout));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_validation_never_reaches_any_automatic_display_route() {
+        for target in [
+            CaptureTarget::WindowDeckAuto,
+            CaptureTarget::WindowDeckCpu,
+            CaptureTarget::WindowDeckNative,
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                let mut health = SessionHealth::default();
+                let error = serve(socket, Some(target), VideoCodec::H264, &mut health).unwrap_err();
+                assert!(health.activation_started.is_none());
+                assert!(health.validation_failed);
+                assert!(!health.session_ended(true));
+                error.to_string()
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            write_message(
+                &mut client,
+                &Message::Hello {
+                    app_version: "test".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message(&mut client).unwrap(),
+                Message::Hello { .. }
+            ));
+            write_message(
+                &mut client,
+                &Message::Capabilities {
+                    max_width: 1280,
+                    max_height: 800,
+                    max_fps: 60,
+                    codecs: VideoCodec::H264.capability() | connection::CAPABILITY,
+                },
+            )
+            .unwrap();
+            // Even WGC must deliver configuration before acquiring its display lease.
+            let Message::SessionConfig { session_id, .. } = read_message(&mut client).unwrap()
+            else {
+                panic!("configuration must precede display activation");
+            };
+            for _ in 0..connection::BURST_PACKETS {
+                assert!(matches!(
+                    read_message(&mut client).unwrap(),
+                    Message::ConnectionProbe { .. }
+                ));
+            }
+            assert_eq!(
+                read_message(&mut client).unwrap(),
+                Message::Ping { nonce: session_id }
+            );
+            write_message(
+                &mut client,
+                &Message::Pong {
+                    nonce: session_id.wrapping_add(1),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message(&mut client).unwrap(),
+                Message::Error { code: 2, .. }
+            ));
+            assert!(server.join().unwrap().contains("acknowledgement"));
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn automatic_display_requires_compatible_negotiation() {
@@ -522,9 +742,14 @@ mod tests {
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
                 let (socket, _) = listener.accept().unwrap();
-                serve(socket, Some(target), VideoCodec::H264)
-                    .unwrap_err()
-                    .to_string()
+                serve(
+                    socket,
+                    Some(target),
+                    VideoCodec::H264,
+                    &mut SessionHealth::default(),
+                )
+                .unwrap_err()
+                .to_string()
             });
             let mut client = TcpStream::connect(address).unwrap();
             client

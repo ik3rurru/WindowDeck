@@ -1,5 +1,22 @@
 # Punto de continuación — 13 de septiembre de 2026
 
+## Conexión inestable tras las pruebas de 0.2.1
+
+El usuario informa de un ciclo generalizado de conexión/desconexión con animación
+de alta de pantalla. Los últimos logs del lanzador confirman sesiones cortas,
+timeouts TCP 10060 y colas H.264 caducadas, seguidos por nuevas activaciones.
+
+El árbol de trabajo incorpora validación de tráfico antes del monitor,
+inicialización previa del reproductor integrado, tolerancia de dos segundos a
+atascos H.264, reintentos crecientes y pausa tras tres fallos de arranque.
+El panel distingue validación, activación y envío efectivo. Ver
+[ADR 0020](adr/0020-connection-validation.md) y [testing.md](testing.md).
+El usuario ha autorizado publicar estos cambios y hará la prueba. Se prepara
+la versión preliminar 0.2.2 para Windows y Steam Deck con las notas de
+[actualización](releases/v0.2.2.md). La repetición con ambos extremos actualizados
+y la red original sigue pendiente; las pruebas locales no acreditan estabilidad
+real prolongada. La publicación se confirmará tras completar el workflow Release.
+
 ## Distribución Windows/Steam Deck
 
 El usuario solicita publicar todo lo nuevo, limpiar sobrantes y distribuir

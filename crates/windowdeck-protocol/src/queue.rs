@@ -5,6 +5,9 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 pub const MAX_AGE: Duration = Duration::from_millis(250);
+// A presentation deadline is not a transport failure. Tolerate short Wi-Fi or
+// decoder stalls without tearing down the display; queues remain bounded.
+pub const STALL_TIMEOUT: Duration = Duration::from_secs(2);
 pub const CAPACITY: usize = 2;
 
 pub struct Queued<T> {

@@ -155,7 +155,7 @@ pub fn send(
             payload,
         };
         for message in fragments(session, unit).map_err(io::Error::other)? {
-            if sent.elapsed() >= queue::MAX_AGE {
+            if sent.elapsed() >= queue::STALL_TIMEOUT {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "CPU encoded frame expired during send",
@@ -165,6 +165,7 @@ pub fn send(
         }
         timings.record(sent.elapsed());
         if number == 0 {
+            super::publish_state("streaming");
             emit(
                 Level::Info,
                 "h264_first_access_unit_sent",
@@ -192,6 +193,48 @@ mod tests {
         vec![
             0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 0x67, 0x80, 0, 0, 0, 1, 0x68, 0x80, 0, 0, 1, 0x65, 0x80,
         ]
+    }
+
+    #[test]
+    fn a_brief_stall_mid_frame_preserves_all_fragments_and_the_session() {
+        struct PausedWriter {
+            bytes: Vec<u8>,
+            paused: bool,
+        }
+        impl Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if !self.paused {
+                    self.paused = true;
+                    std::thread::sleep(std::time::Duration::from_millis(350));
+                }
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut encoded = keyframe();
+        encoded.extend(vec![0x55; MAX_VIDEO_PAYLOAD * 3]);
+        let mut output = PausedWriter {
+            bytes: Vec::new(),
+            paused: false,
+        };
+        assert_eq!(
+            send(encoded.as_slice(), &mut output, 91, || false).unwrap(),
+            (encoded.len() as u64, 1)
+        );
+        let mut wire = output.bytes.as_slice();
+        let mut assembler = Assembler::new(91);
+        let unit = loop {
+            if let Some(unit) = assembler.push(read_message(&mut wire).unwrap()).unwrap() {
+                break unit;
+            }
+        };
+        assert_eq!(unit.payload, encoded);
+        assert_eq!(unit.number, 0);
+        assert_eq!(read_message(&mut wire).unwrap(), Message::Stop);
+        assert!(wire.is_empty());
     }
 
     #[test]

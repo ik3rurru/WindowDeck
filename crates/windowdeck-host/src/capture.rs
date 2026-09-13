@@ -468,7 +468,7 @@ pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), 
     let codec = std::env::var("WINDOWDECK_H264_ENCODER").unwrap_or_else(|_| "auto".into());
     let mut encoder = windowdeck_media::Encoder::new(&mapping, &codec)?;
     stream.set_read_timeout(Some(Duration::from_millis(1)))?;
-    stream.set_write_timeout(Some(windowdeck_protocol::queue::MAX_AGE))?;
+    stream.set_write_timeout(Some(windowdeck_protocol::queue::STALL_TIMEOUT))?;
     let mut number = 0;
     let mut send = Timings::default();
     let mut report = Instant::now();
@@ -481,7 +481,7 @@ pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), 
                 return Ok(());
             }
             match stream.peek(&mut [0]) {
-                Ok(0) => return Ok(()),
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
                 Ok(_) => return Err("mensaje de control inesperado durante vídeo".into()),
                 Err(e)
                     if matches!(
@@ -507,7 +507,7 @@ pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), 
             payload: packet.bytes,
         };
         for message in fragments(session_id, unit)? {
-            if started.elapsed() >= windowdeck_protocol::queue::MAX_AGE {
+            if started.elapsed() >= windowdeck_protocol::queue::STALL_TIMEOUT {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "encoded frame expired during send",
@@ -517,6 +517,9 @@ pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), 
             write_message(&mut stream, &message)?;
         }
         send.record(started.elapsed());
+        if number == 0 {
+            super::publish_state("streaming");
+        }
         progress = Instant::now();
         number += 1;
         if report.elapsed() >= Duration::from_secs(1) {
@@ -772,7 +775,7 @@ fn stream_h264_input(
     );
 
     let max_age = if framed {
-        windowdeck_protocol::queue::MAX_AGE
+        windowdeck_protocol::queue::STALL_TIMEOUT
     } else {
         LEGACY_STALL_TIMEOUT
     };
@@ -926,6 +929,7 @@ fn send_h264_stream(
         bytes += read as u64;
         chunk += 1;
         if chunk == 1 {
+            super::publish_state("streaming");
             emit(
                 Level::Info,
                 "h264_first_packet_sent",
@@ -1059,6 +1063,9 @@ impl GraphicsCaptureApiHandler for CaptureStream {
             },
         )?;
         self.number += 1;
+        if self.number == 1 {
+            super::publish_state("streaming");
+        }
         if self.number.is_multiple_of(u64::from(super::FPS)) {
             emit(
                 Level::Info,
@@ -1256,21 +1263,28 @@ mod tests {
     }
 
     #[test]
-    fn framed_h264_rejects_delayed_bytes_before_the_legacy_limit() {
-        let (sender, receiver) = windowdeck_protocol::queue::channel();
-        sender
-            .send(windowdeck_protocol::queue::Queued {
-                produced: Instant::now() - Duration::from_millis(300),
-                value: vec![1, 2, 3],
-            })
-            .unwrap();
-        assert_eq!(
-            EncodedQueue::new(receiver, windowdeck_protocol::queue::MAX_AGE)
-                .read(&mut [0; 8])
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::TimedOut
-        );
+    fn framed_h264_preserves_short_stalls_but_rejects_a_hung_consumer() {
+        for (age, expired) in [
+            (Duration::from_millis(800), false),
+            (Duration::from_secs(3), true),
+        ] {
+            let (sender, receiver) = windowdeck_protocol::queue::channel();
+            sender
+                .send(windowdeck_protocol::queue::Queued {
+                    produced: Instant::now() - age,
+                    value: vec![1, 2, 3],
+                })
+                .unwrap();
+            let mut bytes = [0; 8];
+            let result = EncodedQueue::new(receiver, windowdeck_protocol::queue::STALL_TIMEOUT)
+                .read(&mut bytes);
+            if expired {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+            } else {
+                assert_eq!(result.unwrap(), 3);
+                assert_eq!(&bytes[..3], &[1, 2, 3]);
+            }
+        }
     }
 
     #[test]

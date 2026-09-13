@@ -14,8 +14,15 @@ instala el driver. El broker configura sus reglas UDP 5353 y TCP 48150 para el
 ejecutable actual, en redes privadas y desde la subred local. Si el puerto 48150
 está ocupado, el panel muestra el error del host y permite consultar sus registros.
 
-Abrir despues el cliente en la Steam Deck. El panel recibe estados de negociacion
-y sesion del host; no confirma el barrido fisico del primer frame en la Deck.
+Abrir después el cliente en la Steam Deck. Con ambos extremos actualizados, el
+panel muestra «Comprobando la estabilidad de la conexión» durante una prueba
+de tráfico de unos dos segundos, antes de activar la pantalla. Si falla, muestra
+el problema y conserva el monitor desactivado. «Deck conectada» indica que el
+host ha empezado a enviar vídeo; no confirma su presentación física en la Deck.
+Tres fallos de arranque seguidos pausan los reintentos. Revisa la red y los
+registros; pulsa Detener e Iniciar para volver a probar. Los clientes anteriores
+conservan compatibilidad, pero no realizan la prueba previa de tráfico.
+Diseño y límites en [ADR 0020](adr/0020-connection-validation.md).
 Detener o cerrar solicita al host que termine y libere el monitor, con ocho
 segundos de margen antes de terminar su grupo de procesos. Después recoge los
 brokers. La interfaz sigue respondiendo durante esta espera. Cancelar un inicio

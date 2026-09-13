@@ -55,9 +55,13 @@ jobs:
         timeout-minutes: 3
       - run: cargo run --locked -p windowdeck-client --features native-media -- --media-self-test
       - if: runner.os == 'Linux'
-        run: python3 scripts/test-native-client.py --client target/debug/windowdeck-client
+        run: |
+          python3 scripts/test-native-client.py --client target/debug/windowdeck-client
+          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --legacy-handshake
       - if: runner.os == 'Windows'
-        run: python scripts/test-native-client.py --client target/debug/windowdeck-client.exe
+        run: |
+          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe
+          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --legacy-handshake
       - if: runner.os == 'Windows'
         shell: pwsh
         run: ./driver/windows-idd/build.ps1 -ControlOnly -Toolset v143 -SdkVersion 10.0

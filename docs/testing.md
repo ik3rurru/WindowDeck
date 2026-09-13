@@ -1,5 +1,40 @@
 # Pruebas y mediciones
 
+## Validación de conexión — 13 de septiembre de 2026
+
+Después de probar 0.2.1, el usuario informa de altas/bajas repetidas del monitor.
+Los últimos registros locales confirman timeout TCP 10060, cola caducada y
+reintentos de sesiones cortas de H.264 por unidades de acceso. La modificación
+se describe en [ADR 0020](adr/0020-connection-validation.md).
+
+Validación local en Windows:
+
+- Formato y Clippy base/nativo con advertencias tratadas como errores: correctos.
+- `cargo test --locked --workspace` y `--all-features`: 55 pruebas superadas en
+  cada configuración. Se mantienen las exclusiones habituales de multicast,
+  fixture de subproceso y regresión FFmpeg, esta última ejecutada aparte.
+- Sockets locales: prueba completa de 4 MB, comprobación de ráfagas y nonces,
+  silencio y respuesta parcial con timeout, cancelación y restauración de
+  opciones TCP. Las rutas automáticas WGC, CPU y GPU rechazan la validación
+  incorrecta antes de activar concesiones o auxiliares.
+- Pausa de 350 ms durante un fotograma H.264: todos los fragmentos llegan en
+  la misma sesión, sin perder bytes. Cola retenida 800 ms: aceptada; datos de
+  tres segundos: rechazados. Contador de fallos, cierre normal y esperas
+  progresivas también comprobados.
+- Autoprueba multimedia: 18 fotogramas y tres reinicios de decoder correctos.
+- `scripts/test-native-client.py`, tanto con validación como con
+  `--legacy-handshake`: correctos. El fallo simulado de SDL no abre una conexión;
+  el renderer se inicializa antes de conectar. La negociación nueva se prueba
+  también tras una pérdida de fragmento y reconexión; Stop termina el cliente.
+  Ambas variantes quedan incluidas en CI nativo Windows/Linux.
+- `cpu_encoder_output_decodes_after_fragmented_transport -- --ignored`:
+  correcta con FFmpeg 9.0.1/libx264 y 120 fotogramas generados.
+
+Estas pruebas usan sockets locales, imágenes sintéticas y SDL sin ventana.
+No activan el monitor virtual ni reproducen la red real de la Deck. Falta
+repetir la prueba visual con ambos extremos actualizados, cortes de Wi-Fi y
+sesión prolongada. Los cambios no están publicados ni instalados en la Deck.
+
 ## Distribución — 13 de septiembre de 2026
 
 Preparación de la primera release conjunta Windows/Flatpak:
