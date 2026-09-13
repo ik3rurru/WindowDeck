@@ -1,7 +1,9 @@
 name: CI
 
 on:
+  workflow_call:
   push:
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -18,8 +20,15 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/install-steamdeck.sh scripts/package-steamdeck.sh packaging/steamdeck/windowdeck
+          python3 scripts/test-steamdeck-installer.py
+      - if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/test-launcher.ps1 -Launcher target/debug/windowdeck-launcher.exe
 
   native:
     strategy:
@@ -42,6 +51,7 @@ jobs:
           "$env:WINDOWDECK_SDL_DIR/lib/x64" >> $env:GITHUB_PATH
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
+      - run: cargo test --locked -p windowdeck-host --all-features cpu_encoder_output_decodes_after_fragmented_transport -- --ignored
       - run: cargo run --locked -p windowdeck-client --features native-media -- --media-self-test
       - if: runner.os == 'Linux'
         run: python3 scripts/test-native-client.py --client target/debug/windowdeck-client

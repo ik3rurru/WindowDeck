@@ -4,9 +4,15 @@ Implementación del 10 de septiembre de 2026. Se conserva Rust, TCP, la ruta CPU
 y los procedimientos de suspensión/recuperación existentes. La integración
 FFmpeg/SDL se activa al compilar con `native-media`.
 
+Actualización del 12 de septiembre: el host CPU también negocia unidades de
+acceso con el reproductor integrado. El usuario acepta su latencia en la Deck
+y el retorno de ventanas al detenerse; se verifican cierre inesperado del panel
+y reconexión. La captura GPU sigue siendo experimental. Véase ADR 0019 y el
+registro fechado de `testing.md`.
+
 ## Ejecutar
 
-En Windows, descomprimir el paquete y abrir `WindowDeck.vbs`. Incluye host,
+En Windows, descomprimir el paquete y abrir `WindowDeck.exe`. Incluye host,
 auxiliar, cliente, FFmpeg, SDL y manifiesto de versiones. Se necesita el driver
 de WindowDeck ya instalado: el paquete no instala ni reemplaza drivers.
 
@@ -17,19 +23,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-media.ps1 -Dow
 powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/build.ps1
 ```
 
-Abrir después `WindowDeck.vbs`. El lanzador utiliza `target/release`, selecciona
+Abrir después `target/release/windowdeck-launcher.exe`. El lanzador utiliza `target/release`, selecciona
 CPU por defecto y recibe estados del host. Detener solicita el cierre de
 la sesión y la liberación del monitor; matar el proceso queda como respaldo si
 no termina en ocho segundos. El controlador elevado conserva el monitor solo
 mientras existe una concesión del host.
 
 El lanzador normal utiliza el broker CPU. Para el experimento GPU se ejecuta
-`powershell -ExecutionPolicy Bypass -File scripts/WindowDeck.ps1 -Native`;
+`target/release/windowdeck-launcher.exe --native`;
 solo ese modo mantiene ambos brokers para negociar también con clientes anteriores.
 Si la Deck solo admite MPEG-TS, el host experimental selecciona el respaldo CPU.
 El antiguo switch `-Legacy` se sustituye por abrir el panel sin switches.
 La corrección de las desconexiones al arrancar está en el host: no requiere
-reinstalar el Flatpak 0.1.0 que ya tiene la Deck. La prueba real del
+reinstalar el Flatpak 0.1.0 anterior. La prueba real del
 10 de septiembre está documentada en `docs/testing.md`.
 
 Lanzamiento nativo manual (experimental): iniciar `windowdeck-display.exe --gpu-frame-broker`
@@ -55,7 +61,8 @@ expresamente la reproducción anterior.
   D3D11. AMF/NVENC reciben superficies GPU directamente, sin readback CPU.
 - `WINDOWDECK_H264_ENCODER=auto` selecciona el encoder del adaptador y usa
   libx264 si no puede abrirlo. `libx264` fuerza el respaldo integrado con
-  readback; `--driver-h264` conserva el pipeline CPU anterior completo.
+  readback; `--driver-h264` conserva la captura y codificación CPU y negocia
+  unidades de acceso o MPEG-TS según el cliente.
 - Fotogramas nuevos con más de 50 ms se descartan antes de codificar. Un
   escritorio estático puede repetir la última imagen válida a 60 Hz. Se
   registran adquisiciones nuevas, repeticiones y descartes por separado.
@@ -72,7 +79,9 @@ expresamente la reproducción anterior.
 
 La envoltura del protocolo sigue siendo la versión 3. La capacidad nueva
 `H264Frames=3` transporta unidades de acceso reales, fragmentadas hasta 64 KiB,
-con timestamp QPC de adquisición y flag de keyframe del encoder. El ensamblador
+con flag de keyframe y timestamp QPC cuando lo proporciona el encoder integrado
+del host. La salida CPU/FFmpeg usa `captured_micros=0`, porque su tubería no
+conserva esa marca de captura. El ensamblador
 limita cada unidad a 4 MiB y verifica sesión, orden y metadatos. `H264=2` conserva
 MPEG-TS: `captured_micros=0` indica que su captura es desconocida y su marca
 inicial conserva únicamente la semántica histórica de inicio de flujo.

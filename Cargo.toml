@@ -5,6 +5,7 @@ members = [
     "crates/windowdeck-host",
     "crates/windowdeck-client",
     "crates/windowdeck-media",
+    "crates/windowdeck-launcher",
 ]
 resolver = "3"
 

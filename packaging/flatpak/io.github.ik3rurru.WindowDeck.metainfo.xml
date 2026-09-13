@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ik3rurru.WindowDeck</id>
+  <name>WindowDeck</name>
+  <summary>Use your Steam Deck as a second Windows display</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>WindowDeck receives a 1280 × 800 extended Windows desktop over the local
+    network, with automatic host discovery and an integrated H.264 player.</p>
+    <p>This prototype requires the WindowDeck host and virtual display driver
+    on Windows. Use a trusted local network: pairing and encryption are not
+    implemented yet.</p>
+  </description>
+  <launchable type="desktop-id">io.github.ik3rurru.WindowDeck.desktop</launchable>
+  <url type="homepage">https://github.com/ik3rurru/WindowDeck</url>
+  <url type="bugtracker">https://github.com/ik3rurru/WindowDeck/issues</url>
+  <releases>
+    <release version="0.2.0" date="2026-09-13" type="development"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

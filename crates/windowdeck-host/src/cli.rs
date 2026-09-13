@@ -7,6 +7,7 @@ Uso recomendado (Windows, con --frame-broker iniciado):
   windowdeck-host --driver-h264 [DIRECCION]
 
 Sin argumentos se utiliza la misma ruta CPU H.264.
+Se negocia el reproductor integrado o MPEG-TS para clientes anteriores.
 DIRECCION predeterminada: 0.0.0.0:48150
 
   --help, -h                    Mostrar esta ayuda
@@ -46,9 +47,11 @@ pub(super) fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode,
         Some("--help" | "-h") => finish(args, Mode::Help),
         Some("--version" | "-V") => finish(args, Mode::Version),
         Some("diag") => parse_diag(args),
-        None | Some("--driver-h264") => {
-            serve(args, Some(CaptureTarget::WindowDeckCpu), VideoCodec::H264)
-        }
+        None | Some("--driver-h264") => serve(
+            args,
+            Some(CaptureTarget::WindowDeckCpu),
+            VideoCodec::H264Frames,
+        ),
         Some("--driver-native-h264") => serve(
             args,
             Some(CaptureTarget::WindowDeckNative),
@@ -168,7 +171,7 @@ mod tests {
                 Ok(Mode::Serve {
                     address: DEFAULT_ADDRESS.into(),
                     monitor: Some(CaptureTarget::WindowDeckCpu),
-                    codec: VideoCodec::H264,
+                    codec: VideoCodec::H264Frames,
                 })
             );
         }
@@ -177,7 +180,7 @@ mod tests {
             Ok(Mode::Serve {
                 address: "127.0.0.1:48151".into(),
                 monitor: Some(CaptureTarget::WindowDeckCpu),
-                codec: VideoCodec::H264,
+                codec: VideoCodec::H264Frames,
             })
         );
         assert_eq!(

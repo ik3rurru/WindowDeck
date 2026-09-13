@@ -1,5 +1,35 @@
 # Pruebas y mediciones
 
+## Distribución — 13 de septiembre de 2026
+
+Preparación de la primera release conjunta Windows/Flatpak:
+
+- `cargo fmt --check`, Clippy base y con todas las funciones: correctos.
+- `cargo test --locked --workspace` y `--all-features`: 46 pruebas superadas
+  en cada configuración de Windows. Multicast, fixture de subproceso y prueba
+  FFmpeg conservan su exclusión normal; esta última se ejecutó expresamente
+  con `cpu_encoder_output_decodes_after_fragmented_transport -- --ignored` y pasó.
+- `scripts/test-native-client.py`: decodificación, fragmentación, desconexión
+  parcial, reconexión y Stop correctos. Autoprueba multimedia: 18 frames y tres
+  reinicios de decoder, contenido verificado.
+- `scripts/test-launcher.ps1`: apertura, controles, segunda instancia y cierre.
+  Evidencia `target/launcher-smoke-464e6c63b7394709804eb41d88b88081/`.
+  Se corrigió la normalización de Path/PATH para entornos Windows con ambas
+  variantes antes de usar `Start-Process`.
+- `scripts/test-windows-package.ps1`: extracción, hashes, versiones, DLL,
+  autopruebas y destino del acceso directo correctos con PATH limitado al
+  paquete y Windows. Paquete local previo al commit:
+  `target/package-fc5a660552d244ee9fd060037b0a5fe9/WindowDeck-0.2.0-windows-x64.zip`.
+- Siete casos de `scripts/test-steamdeck-installer.py` ejecutados por SSH en
+  la Deck: instalación/actualización, escritorio traducido con espacios,
+  cancelación, bundle ausente, instalación del sistema, aplicación ausente,
+  escritorio desactivado y transmisión literal de argumentos. Usan un Flatpak
+  simulado y perfiles temporales; no reinstalaron la aplicación real.
+
+La instalación limpia de Windows y la sesión visual bajo Gamescope siguen
+pendientes. El empaquetado del Flatpak real y la publicación se comprueban
+mediante el workflow Release; sus resultados no se presuponen en este registro.
+
 ## Línea base H.264 local
 
 Medición del 4 de septiembre de 2026 con host y cliente en el mismo PC Windows, monitor fuente de 2560 × 1440 y salida H.264 de 1280 × 800, 30 FPS y 4 Mbps configurados:
@@ -418,3 +448,152 @@ SHA256 del nuevo host release:
 Esta entrega no reinstala el driver ni repite los ensayos físicos del cliente
 de la Deck. Permanecen pendientes la ruta GPU completa, la sesión prolongada,
 el ciclo interactivo del panel y la instalación en un Windows limpio.
+
+## Lanzador Rust — 11 de septiembre de 2026
+
+Se añade `windowdeck-launcher` al workspace y al paquete Windows como
+`WindowDeck.exe`. El panel conserva CPU por defecto, el modo GPU explícito,
+estados del host, elevación del broker y parada con margen de ocho segundos.
+No se modifican driver ni perfiles de vídeo. Diseño: ADR 0018.
+
+Validación local:
+
+- Formato, Clippy y 41 pruebas correctas en la configuración base y con
+  `--all-features`. Se excluye multicast; la prueba auxiliar marcada `ignored`
+  del launcher se ejecuta como subproceso desde su prueba de gestión de hijos.
+- Compilación release del workspace y autoprueba multimedia correctas:
+  18 frames, tres reinicios del decoder y contenido verificado.
+- Apertura/cierre del panel mediante `scripts/test-launcher.ps1`, captura
+  revisada, tres botones accesibles, icono y rechazo de una segunda instancia.
+  Evidencia: `target/launcher-smoke-d992151d53e949aeadf0d66eb9726b5b/`.
+  A 96 DPI, ese prototipo midió 16 ms de inicialización dentro del proceso,
+  311 ms hasta observar los controles desde el arnés y 18,4 MB de working set.
+  El tiempo del arnés incluye su instrumentación; no mide latencia de vídeo.
+- `-Session` pulsó Iniciar en el panel, completó UAC, configuró las dos reglas
+  privadas existentes y observó `windowdeck_state=listening`. Pulsó Detener y
+  observó `stopped`; cerró con código 0. Arranque hasta espera: 3,41 s, incluida
+  la interacción UAC; parada: 336 ms. Evidencia:
+  `target/launcher-smoke-8ff17ccb18694f7287c5ad8b469f5638/`.
+- `-Session -TerminatePanel` terminó únicamente el panel creado por el arnés.
+  El host terminó y el gestor recogió el broker al perder la conexión local,
+  en 8,07 s. Evidencia:
+  `target/launcher-smoke-7300d31b44554e07a790fbe09556a84e/`.
+  Al acabar ambos ensayos no quedaron host, broker ni procesos multimedia;
+  `windowdeck-display --verify` devolvió 4. No se conectó un cliente ni se
+  activó un monitor: esto no prueba todavía retirada durante una transmisión.
+- Análisis sintáctico de los scripts modificados y creación/lectura de un
+  acceso directo de prueba, dirigido al ejecutable Rust y a su icono incrustado.
+
+Paquete final generado:
+`target/WindowDeck-0.2.0-5123194d4c2e469483928d7367788ce3.zip`.
+Se verificaron los hashes de sus 15 ejecutables/DLL y la versión del launcher.
+El ciclo Iniciar/UAC/espera/Detener también pasó desde su `WindowDeck.exe`, con
+los registros en una ruta con espacios: `target/launcher-package-test with spaces/`.
+Se actualizó y verificó el acceso directo existente del escritorio para abrir
+`target/release/windowdeck-launcher.exe`. La ruta del ZIP se conserva en
+`target/launcher-package-current.txt`. No se instalaron drivers ni se dejó una
+sesión abierta. Las fuentes del ZIP corresponden al momento del empaquetado;
+este registro de aceptación posterior se añade al repositorio.
+
+El arnés visual se incluye en CI de Windows. La matriz Linux conserva CLI y
+pruebas del nuevo binario sin dependencias de GUI Windows. Estas ejecuciones
+de CI no se dan por comprobadas para los cambios locales hasta publicarlos.
+
+Pendiente: ciclo con vídeo en la Deck, cancelación de UAC real, fallos con un
+monitor activo, escalas 150/200 % y movimiento entre monitores, e instalación
+en Windows sin herramientas de desarrollo. Se conservan el `.vbs` y el panel
+PowerShell hasta completar la aceptación en una instalación limpia.
+
+## Latencia y ciclo del lanzador con vídeo CPU — 12 de septiembre de 2026
+
+El usuario rechazó la latencia del Flatpak 0.1.0 con FFplay, también tras reiniciar
+la sesión. La comparación `-threads 1 -filter_threads 1` mejoró claramente,
+pero siguió siendo insuficiente. El ensayo temporal `-vf setpts=0` mejoró otra
+vez sin alcanzar una respuesta aceptable. `-avioflags direct -probesize 2048`
+produjo errores de PPS/slices y se descartó. Solo el límite de hilos de FFplay
+se conserva en el código; los dos ensayos posteriores no pasan al producto.
+
+La solución aceptada conecta la captura CPU/libx264 con el reproductor integrado
+mediante unidades de acceso H.264. El host conserva 1280 × 800/60 Hz/16 Mbps,
+el auxiliar y el driver instalados. Los clientes anteriores negocian MPEG-TS
+y conservan su margen de bloqueo de diez segundos. Diseño: ADR 0019.
+
+Validación local de código y paquete:
+
+- Formato y Clippy correctos en configuración base y nativa. El workspace reúne
+  46 pruebas correctas; tras la última corrección de parada se repitieron las
+  pruebas del host en ambas configuraciones. Se excluye multicast y el ensayo
+  externo de FFmpeg se ejecuta aparte. La fixture `ignored` del launcher se
+  ejecuta desde la prueba de propiedad de procesos.
+- El ensayo adicional de FFmpeg genera 120 imágenes móviles a 1280 × 800 con
+  dos IDR y fotogramas dependientes. El nuevo delimitador y el ensamblador
+  conservan exactamente los bytes, orden y keyframes. La decodificación estricta
+  produce los 120 frames con contenido cambiante. Está añadido al trabajo nativo
+  de CI; no se afirma que la CI remota haya ejecutado aún estos cambios locales.
+- Las regresiones cubren delimitadores partidos, cabeceras ausentes o inválidas,
+  unidades de más de 4 MiB, fragmentación y Stop durante una escritura incompleta.
+  La cola nueva rechaza bytes con 300 ms; la prueba MPEG-TS sigue conservando
+  todos los bytes después de una pausa de 800 ms.
+- Compilación release y autoprueba multimedia correctas: 18 frames, tres
+  reinicios de decoder y contenido verificado. `scripts/test-native-client.py`
+  pasa fragmentación, pérdida dentro de un fotograma, reconexión y Stop usando
+  píxeles generados y conexión local.
+
+Prueba en la Steam Deck:
+
+1. El nuevo host negoció MPEG-TS con el cliente anterior durante unos 84 segundos,
+   mediante descubrimiento automático. No hubo pérdidas inesperadas; la instancia
+   se cerró expresamente para instalar el cliente nuevo.
+2. El Flatpak integrado negoció `h264_access_units`; el host registró captura
+   `driver_cpu`, encoder `libx264` y transporte `h264_frames`. La Deck activó
+   OpenGL y VAAPI. No se activó la captura GPU del host.
+3. El usuario respondió **«Sí, ahora es aceptable»** al mover ventanas desde el PC.
+   La primera sesión duró casi tres minutos sin pérdidas, reconexiones ni reinicios
+   por errores de decodificación. Sus 175 intervalos de métricas suman 10.498
+   imágenes decodificadas y presentadas y cero descartes; son contadores internos,
+   no una prueba de 60 imágenes de escritorio distintas por segundo ni una
+   medición de latencia completa. No se atribuye una latencia absoluta en ms.
+4. Detener devolvió el panel al estado detenido, cerró host, auxiliar, broker y
+   FFmpeg, y retiró el monitor (`--verify` = 4). El cliente terminó con resultado
+   `success`. El usuario confirmó **«Sí, todo ha vuelto correctamente»** sobre
+   las ventanas y el escritorio del PC. Los dispositivos físicos y sus estados
+   coinciden con la instantánea anterior.
+5. Una segunda sesión desde el mismo panel recuperó el vídeo. Al terminar
+   únicamente ese panel, verificado por PID, fecha y ejecutable, el monitor se
+   retiró y no quedaron procesos de sesión en la comprobación diez segundos
+   después. La Deck detectó la pérdida y esperó la reconexión.
+6. Se abrió de nuevo el paquete. La misma instancia de la Deck se reconectó con
+   un nuevo identificador de sesión, decodificó y presentó vídeo sin errores.
+   Una segunda parada y el cierre normal del panel dejaron ambos equipos sin
+   procesos de prueba y Windows sin monitor virtual.
+
+Artefactos y versiones:
+
+- Paquete probado: `target/WindowDeck-0.2.0-37a30a1942174e3fab15b72378ca103e.zip`.
+  Hashes de sus 15 ejecutables/DLL comprobados. SHA256 del host:
+  `4446DF7A94CF2B4AF951C82E6CF19830B207650DCF4ABA92E37FD6F63656E30F`.
+  El paquete posterior con documentación actualizada se señala en
+  `target/launcher-package-current.txt` y conserva esos binarios.
+- Flatpak obtenido del artefacto `WindowDeck-flatpak`, ejecución CI `34506074101`,
+  fuentes `ae6fcb6fa7311f9b75bdaefc22f0ca932e01c1a2`. SHA256 del bundle:
+  `7302CC904FAC803114C17BE26BB28F4883253F1C0B3ABD5AA1B598072742FD41`.
+  Instalación resultante: cliente 0.2.0, protocolo 3, `native_media=true`, FFmpeg
+  7.1.3, commit Flatpak
+  `29c2e47f646b5ed8b710354ca10d5bceeb2d51b4b47c05372afc06a19016d4a0`.
+  Este binario ya publicado no incluye el ajuste posterior de hilos de FFplay;
+  la sesión aceptada utiliza su reproductor integrado.
+- Copia recuperable del cliente anterior:
+  `/home/deck/Downloads/windowdeck-before-native-20260912.flatpak`, SHA256
+  `c93adbb163b1aab93e3921e634863d1903feea684ab4dc2e5e2dc970aa18ea8a`.
+- Evidencias de compatibilidad, aceptación, parada y cierre inesperado:
+  `target/launcher-deck-e2e7a530894b4e66982cf0a7303a9941/`.
+  Recuperación y cierre final:
+  `target/launcher-deck-d7ef341b254c4549a1567d0fc7010396/`.
+  Incluyen registros de la Deck y del host, identidad del panel, capturas del
+  panel y estado de procesos, monitor y dispositivos.
+
+No se reinstaló el driver ni se modificaron accesos directos de la Deck: el
+existente selecciona el reproductor integrado con el cliente actualizado.
+Pendientes: cancelar UAC realmente, escalas 150/200 %, sesión prolongada,
+cierre de la ventana del cliente durante reconexión en la Deck e instalación
+en un Windows limpio. La comparación CPU/GPU y el emparejamiento/cifrado siguen abiertos.

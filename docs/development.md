@@ -1,6 +1,8 @@
 # Desarrollo y diagnósticos
 
-La ruta soportada del prototipo es CPU directa del driver, libx264 y MPEG-TS.
+La ruta CPU usa frames del driver y libx264. Negocia unidades de acceso H.264
+con el cliente integrado o MPEG-TS con los clientes anteriores; véase
+[ADR 0019](adr/0019-cpu-integrated-player.md).
 Las rutas históricas se conservan para reproducir sus mediciones; no se amplían
 ni se eligen automáticamente. Véase [ADR 0016](adr/0016-supported-video-routes.md).
 
@@ -18,10 +20,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 El primer comando obtiene SDK con versión y SHA256 fijados, compila release y
 copia FFmpeg/SDL junto a los binarios. `-Download` solo descarga archivos ausentes.
 El segundo compila el auxiliar y el paquete del driver; no instala la DLL.
-El ZIP queda en `target/WindowDeck-0.2.0-<identificador>.zip` e incluye versiones,
+El ZIP queda en `target/package-<identificador>/WindowDeck-0.2.0-windows-x64.zip` e incluye versiones,
 hashes, licencias y fuentes. La validación en un Windows limpio sigue pendiente.
+`scripts/package-windows.ps1 -Release` exige un árbol limpio e incluye las
+fuentes del commit exacto. El empaquetado normal solo necesita compilar el
+auxiliar con `driver/windows-idd/build.ps1 -ControlOnly`; no necesita reconstruir
+ni instalar el driver. `scripts/test-windows-package.ps1 -Archive RUTA.zip`
+verifica la extracción, hashes, ejecutables, multimedia y acceso directo con
+un PATH limitado al paquete y Windows.
 
-Para ejecutar desde el repositorio, abre `WindowDeck.vbs` después de compilar.
+Las etiquetas `v<versión>` activan `.github/workflows/release.yml`: CI en ambas
+plataformas, Flatpak, paquete Windows y publicación conjunta con SHA256.
+La [guía de distribución](steamdeck-distribution.md) documenta las descargas,
+el instalador y los límites de la integración con Steam.
+
+Para ejecutar desde el repositorio, abre `target/release/windowdeck-launcher.exe`
+después de compilar. `cargo build --locked --release -p windowdeck-launcher`
+compila únicamente el panel, sin necesitar FFmpeg/SDL ni WDK. Para iniciar una
+sesión sí hacen falta el host, FFmpeg, sus DLL y el auxiliar del driver.
 El panel utiliza CPU incluso si el binario admite `native-media`.
 
 ## Ruta CPU manual
@@ -46,8 +62,10 @@ Si el auxiliar está fuera de las ubicaciones habituales, configura
 `WINDOWDECK_DISPLAY_EXE`. El broker pertenece a la misma sesión de Windows.
 
 El cliente habitual se abre con `flatpak run io.github.ik3rurru.WindowDeck`.
-La IP manual usa `IP_DEL_PC:48150 --h264-test`. Un cliente nuevo puede negociar
-MPEG-TS con este host y utilizar el mismo reproductor de compatibilidad.
+Con el cliente nuevo, la IP manual usa `IP_DEL_PC:48150 --native`; sin dirección,
+el cliente con `native-media` selecciona automáticamente el reproductor integrado.
+`--h264-test` con IP manual y `--ffplay` permiten comprobar MPEG-TS. Los clientes
+anteriores conservan `IP_DEL_PC:48150 --h264-test`.
 
 ## CLI de diagnóstico
 
@@ -102,7 +120,7 @@ dos despachadores de las mismas pruebas.
 ## Ruta GPU experimental
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/WindowDeck.ps1 -Native
+.\target\release\windowdeck-launcher.exe --native
 ```
 
 Esta selección exige `native-media`; el panel normal no la activa por detectar
@@ -126,8 +144,22 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 target/release/windowdeck-client.exe --media-self-test
 python scripts/test-native-client.py --client target/release/windowdeck-client.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-launcher.ps1
 ```
 
 La CLI se valida sin activar el monitor. La aceptación del driver y de la ruta
 GPU requiere hardware real. Los requisitos de una hora de vídeo, latencia visual
 y cambio de usuario siguen abiertos; véase el [roadmap](../WINDOWDECK_ROADMAP.md).
+
+La prueba del panel guarda captura, controles accesibles, tiempo de arranque,
+memoria, DPI y cierre en `target/launcher-smoke-<identificador>/`. No inicia
+host ni broker ni modifica firewall. Se ejecuta también en CI de Windows.
+`WINDOWDECK_LOG_DIR` permite cambiar la carpeta de registros de las sesiones
+durante pruebas; no modifica variables globales. El diseño del lanzador está
+en [ADR 0018](adr/0018-rust-launcher.md).
+
+Con el driver instalado y sin otra instancia abierta, `scripts/test-launcher.ps1
+-Session` comprueba Iniciar/UAC/espera/Detener con el host real; prepara las dos
+reglas privadas del firewall. `-Session -TerminatePanel` termina su propio panel
+después del arranque y verifica la recogida de host y broker. Son ensayos locales
+sin cliente: no sustituyen la aceptación visual del vídeo en la Deck.

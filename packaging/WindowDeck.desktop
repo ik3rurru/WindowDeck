@@ -2,8 +2,9 @@
 Type=Application
 Name=WindowDeck
 Comment=Conectar con WindowDeck en el PC
-Exec=flatpak run io.github.ik3rurru.WindowDeck --h264-test --fullscreen
-Icon=video-display
+Exec=flatpak run io.github.ik3rurru.WindowDeck --fullscreen
+Icon=io.github.ik3rurru.WindowDeck
 Terminal=false
 Categories=Network;
+StartupNotify=false
 X-Flatpak=io.github.ik3rurru.WindowDeck

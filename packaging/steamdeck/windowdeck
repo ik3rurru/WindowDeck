@@ -1,0 +1,3 @@
+#!/bin/sh
+# A stable executable path for Steam's non-Steam game picker.
+exec flatpak run io.github.ik3rurru.WindowDeck "$@" --fullscreen

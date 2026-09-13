@@ -6,7 +6,7 @@ $inventoryBin = Join-Path $inventoryRoot 'bin'
 if (!(Test-Path -LiteralPath $inventoryBin)) { $inventoryBin = Join-Path $inventoryRoot 'target/release' }
 function Read-Binary([string]$Path) {
     if (!(Test-Path -LiteralPath $Path)) { return @{ path = $Path; available = $false } }
-    return @{ path = $Path; sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash; version = @(& $Path --version) }
+    return @{ path = $Path; sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash; version = @(& $Path --version | Out-String -Stream) }
 }
 function Read-DriverPackage([string]$Folder) {
     $dll = Join-Path $Folder 'WindowDeckDisplay.dll'
@@ -21,8 +21,11 @@ $driverFiles = @(Get-ChildItem -LiteralPath "$env:windir/System32/DriverStore/Fi
 })
 $helperPath = Join-Path $inventoryBin 'windowdeck-display.exe'
 if (!(Test-Path -LiteralPath $helperPath)) { $helperPath = Join-Path $inventoryRoot 'target/windows-idd/windowdeck-display.exe' }
+$launcherPath = Join-Path $inventoryRoot 'WindowDeck.exe'
+if (!(Test-Path -LiteralPath $launcherPath)) { $launcherPath = Join-Path $inventoryBin 'windowdeck-launcher.exe' }
 $data = [ordered]@{
     recorded_utc = [DateTime]::UtcNow.ToString('o')
+    launcher = Read-Binary $launcherPath
     host = Read-Binary (Join-Path $inventoryBin 'windowdeck-host.exe')
     client = Read-Binary (Join-Path $inventoryBin 'windowdeck-client.exe')
     helper = Read-Binary $helperPath

@@ -1,0 +1,135 @@
+He revisado el código, la documentación y los resultados anteriores sin modificar el proyecto ni iniciar nuevas pruebas.
+
+  Mi valoración es que WindowDeck conserva un núcleo en Rust, pero la ruta de vídeo sigue siendo la de un prototipo formado por
+  varios programas conectados. Eso dificulta controlar los tiempos, las colas y la recuperación. No hay evidencia suficiente
+  para atribuir la lentitud al número de dependencias.
+
+  Mantendría Rust. Cambiaría cómo circulan los fotogramas y cómo se administra la aplicación.
+
+  Qué puede estar causando la lentitud
+
+  1. El inicio automático introduce unos ocho segundos de espera por diseño.
+
+     El cliente busca equipos durante cuatro segundos completos. Después de seleccionar uno, vuelve a buscarlo durante otros
+     cuatro segundos antes de conectar. Encontrarlo antes no termina la espera.
+
+     Esto explica parte de la sensación de lentitud al abrir, aunque no afecta a los FPS durante la transmisión. La alternativa
+     es conservar el resultado encontrado, conectar inmediatamente y mantener el descubrimiento actualizado en segundo plano.
+     Código de descubrimiento (crates/windowdeck-protocol/src/discovery.rs:63)
+
+  2. La ruta activa mueve imágenes sin comprimir por CPU y entre procesos.
+
+     Simplificando:
+
+     Textura GPU → lectura a RAM → memoria compartida → auxiliar → pipe → FFmpeg/libx264 → TCP → cliente → pipe → ffplay
+
+     A 1280 × 800 y 60 FPS, los píxeles BGRA representan 246 MB/s por cada recorrido completo de los fotogramas. Esa cifra
+     corresponde al tráfico interno de imágenes, no al tráfico de red.
+
+     Además, el lanzador selecciona libx264, que codifica por CPU. Las copias, la conversión de color y la codificación son
+     candidatos relevantes, aunque todavía no hemos separado cuánto cuesta cada etapa. Configuración del encoder (crates/
+     windowdeck-host/src/capture.rs:477)
+
+     La alternativa con mayor potencial es conservar las imágenes en GPU hasta codificarlas: textura compartida, conversión de
+     color en GPU y encoder hardware. Cambiar solamente libx264 por NVENC o AMF manteniendo la entrada por RAM deja parte del
+     problema intacto.
+
+  3. Una etapa lenta puede frenar toda la cadena.
+
+     El host lee de FFmpeg y escribe en TCP de forma secuencial; el cliente recibe y escribe en ffplay también de forma
+     bloqueante. Si el consumidor se retrasa, la presión puede propagarse hasta el productor.
+
+     Los registros anteriores documentan escrituras bloqueadas durante 641 ms. Esto demuestra el bloqueo en cadena, pero todavía
+     no identifica si empezó en codificación, transporte o reproducción. Análisis registrado (docs/fps-pacing-review.md:13)
+
+     Propondría colas pequeñas y explícitas, con límites de antigüedad y descarte de fotogramas sin comprimir antes de
+     codificarlos. El objetivo sería evitar que una pausa produzca una acumulación de imágenes antiguas.
+
+     No podemos descartar fragmentos H.264 arbitrariamente: el protocolo actual transporta trozos de MPEG-TS, sin identificar
+     correctamente todos los fotogramas y sus dependencias.
+
+  4. Tenemos poco control y poca visibilidad sobre la presentación final.
+
+     El vídeo H.264 lo muestra ffplay; winit/softbuffer no está dibujando esa transmisión. Por tanto, cambiar únicamente la
+     biblioteca gráfica de la interfaz no resolvería esta ruta.
+
+     Ya utilizamos opciones de baja latencia, pero no verificamos qué decodificador hardware se está usando ni medimos los FPS
+     realmente presentados. La documentación describe ffplay principalmente como reproductor sencillo y banco de pruebas de las
+     API de FFmpeg. Documentación oficial
+
+     Además, captured_micros se rellena al enviar un fragmento, no al capturar la imagen. Actualmente no permite medir la
+     latencia real desde captura hasta pantalla. Envío de vídeo (crates/windowdeck-host/src/capture.rs:656)
+
+  5. La interfaz de Windows también tiene causas propias de lentitud.
+
+     El lanzador utiliza target/debug/windowdeck-host.exe y consulta Get-NetTCPConnection cada 500 ms desde el hilo de la
+     interfaz. Esa consulta puede bloquear el panel independientemente del rendimiento del vídeo. Lanzador (scripts/
+     WindowDeck.ps1:85)
+
+     Usaría un ejecutable release empaquetado y notificaciones de estado procedentes del host. PowerShell puede seguir sirviendo
+     para desarrollo e instalación; la aplicación debería administrar su sesión directamente.
+
+  Alternativas a las decisiones actuales
+
+   Alternativa                             Qué aportaría                               Coste y limitaciones
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Consolidar la solución actual           Corregir descubrimiento, usar release,      Mantiene los pipes y el control limitado
+                                           quitar consultas bloqueantes y medir las    sobre el reproductor.
+                                           etapas. Mejora rápida con poco riesgo.
+  ──────────────────────────────────────  ──────────────────────────────────────────  ──────────────────────────────────────────
+   Rust + bibliotecas FFmpeg integradas    Control directo de fotogramas, tiempos,     Requiere integración nativa, gestión
+                                           colas, codificación y decodificación;       cuidadosa de recursos y trabajo
+                                           permite sustituir los procesos FFmpeg/      específico para compartir superficies
+                                           ffplay.                                     GPU.
+  ──────────────────────────────────────  ──────────────────────────────────────────  ──────────────────────────────────────────
+   Rust + vídeo nativo por plataforma      En Windows, D3D11 y Media Foundation; en    Mayor cantidad de código propio y dos
+                                           Deck, decodificación y presentación         implementaciones que mantener y validar.
+                                           aceleradas. Puede reducir dependencias
+                                           distribuidas en Windows.
+  ──────────────────────────────────────  ──────────────────────────────────────────  ──────────────────────────────────────────
+   Rust + GStreamer                        Delega buena parte de la gestión            Mayor conjunto de dependencias y trabajo
+                                           multimedia en un framework existente,       de empaquetado/configuración.
+                                           con bindings para Rust.
+
+  Las bases técnicas existen: FFmpeg expone contextos D3D11, Media Foundation permite proporcionar un dispositivo Direct3D a sus
+  encoders, y GStreamer dispone de bindings oficiales para Rust. La compatibilidad y el rendimiento en nuestros equipos
+  necesitarían validación.
+
+  Mi recomendación
+
+  Elegiría Rust con una integración multimedia acotada basada inicialmente en FFmpeg, avanzando por etapas. Ya dependemos de su
+  tecnología; aprovechar sus bibliotecas permitiría controlar mejor el flujo sin escribir nuestros propios códecs.
+
+  La arquitectura objetivo sería:
+
+  - Driver pequeño: publica superficies y gestiona el monitor virtual. Mantendría el encoder fuera del driver para aislar fallos
+    y actualizaciones.
+
+  - Host Rust: controla la sesión y alimenta un encoder hardware con superficies GPU.
+  - Cliente Rust: controla decodificación, presentación y recuperación, con descarte y reinicio explícitos.
+  - Interfaz ligera: recibe estados del núcleo y permite iniciar o detener una sesión.
+  - Descubrimiento independiente: mantiene direcciones actualizadas sin bloquear el inicio ni formar parte del protocolo de
+    vídeo.
+
+  Conservaría la ruta CPU como respaldo. También conservaría las pruebas de suspensión y recuperación que ya funcionan.
+
+  No empezaría cambiando TCP por UDP: primero localizaría las esperas. Si las pérdidas de Wi-Fi resultan determinantes, entonces
+  evaluaría un transporte de vídeo con límites de tiempo y recuperación definidos.
+
+  El orden de trabajo que propongo
+
+  1. Resolver la lentitud evidente de uso: doble descubrimiento, ejecutable debug y consultas del panel.
+  2. Obtener una medición fiable: tiempos de captura, conversión, codificación, recepción, decodificación y presentación;
+     distinguir imágenes nuevas de repetidas.
+
+  3. Probar una única ruta GPU completa, comparándola con la actual bajo las mismas condiciones.
+  4. Integrar el cliente multimedia y simplificar el lanzamiento, conservando las pruebas de recuperación.
+  5. Cerrar el empaquetado y la reproducibilidad: identificar versiones de host, cliente, FFmpeg y driver instalado; ampliar CI
+     para cubrir el código nativo.
+
+  Hay una corrección importante en la documentación: algunas pruebas anteriores reconstruyeron el driver, pero no instalaron la
+  nueva DLL. Por eso no podemos utilizarlas para descartar mejoras en esa ruta.
+
+  La prioridad técnica sería controlar la antigüedad de cada imagen y eliminar el recorrido GPU→RAM→GPU donde sea posible.
+  Reducir dependencias debería acompañar esa simplificación, evitando sustituir bibliotecas maduras por más código propio
+  difícil de mantener.

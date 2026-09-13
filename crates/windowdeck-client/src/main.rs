@@ -321,6 +321,12 @@ fn ffplay_command(fullscreen: bool, baseline: bool) -> Command {
         "nobuffer",
         "-flags",
         "low_delay",
+        // Automatic decoder/filter threading added visible delay on the Deck.
+        // Keep both pools bounded for interactive playback (docs/testing.md).
+        "-threads",
+        "1",
+        "-filter_threads",
+        "1",
         "-framedrop",
         "-probesize",
         "32",
@@ -1271,6 +1277,10 @@ mod tests {
                 "nobuffer",
                 "-flags",
                 "low_delay",
+                "-threads",
+                "1",
+                "-filter_threads",
+                "1",
                 "-framedrop",
                 "-probesize",
                 "32",
@@ -1287,9 +1297,9 @@ mod tests {
         );
         let reduced = ffplay_command(true, false);
         let reduced_args: Vec<_> = reduced.get_args().collect();
-        assert_eq!(&reduced_args[..17], &baseline_args[..17]);
-        assert_eq!(&reduced_args[17..21], ["-max_delay", "0", "-sync", "ext"]);
-        assert_eq!(&reduced_args[21..], &baseline_args[17..]);
+        assert_eq!(&reduced_args[..21], &baseline_args[..21]);
+        assert_eq!(&reduced_args[21..25], ["-max_delay", "0", "-sync", "ext"]);
+        assert_eq!(&reduced_args[25..], &baseline_args[21..]);
         assert!(
             !ffplay_command(false, false)
                 .get_args()

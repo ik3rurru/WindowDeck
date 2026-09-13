@@ -202,7 +202,15 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
         "ddagrab=output_idx={}:framerate={ENCODE_FPS}:draw_mouse=1",
         index - 1
     );
-    stream_h264_input(stream, session_id, input, index.to_string(), None, None)
+    stream_h264_input(
+        stream,
+        session_id,
+        input,
+        index.to_string(),
+        None,
+        None,
+        false,
+    )
 }
 
 fn display_tool() -> Result<PathBuf, AnyError> {
@@ -379,7 +387,15 @@ pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), Any
             ("capture", "windows_graphics_capture"),
         ],
     );
-    stream_h264_input(stream, session_id, input, name.clone(), Some(name), None)
+    stream_h264_input(
+        stream,
+        session_id,
+        input,
+        name.clone(),
+        Some(name),
+        None,
+        false,
+    )
 }
 
 struct CpuFrameSource(std::process::Child);
@@ -393,7 +409,11 @@ impl Drop for CpuFrameSource {
     }
 }
 
-pub fn stream_driver_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+pub fn stream_driver_h264(
+    stream: TcpStream,
+    session_id: u64,
+    framed: bool,
+) -> Result<(), AnyError> {
     let mut source = CpuFrameSource(
         Command::new(display_tool()?)
             .arg("--cpu-frame-stream")
@@ -431,6 +451,7 @@ pub fn stream_driver_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyE
         name.clone(),
         Some(name),
         Some(input),
+        framed,
     )
 }
 
@@ -551,6 +572,7 @@ fn stream_h264_input(
     monitor: String,
     virtual_device: Option<String>,
     raw_input: Option<std::process::ChildStdout>,
+    framed: bool,
 ) -> Result<(), AnyError> {
     let encoder_name =
         std::env::var("WINDOWDECK_H264_ENCODER").unwrap_or_else(|_| "libx264".into());
@@ -619,7 +641,11 @@ fn stream_h264_input(
                 "-tune",
                 "zerolatency",
                 "-x264-params",
-                "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0",
+                if framed {
+                    "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0:repeat-headers=1"
+                } else {
+                    "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0"
+                },
             ]);
         }
         "h264_amf" => {
@@ -636,16 +662,20 @@ fn stream_h264_input(
     } else {
         "nv12"
     };
-    let mut ffmpeg = command
-        .args([
-            "-bf",
-            "0",
-            "-g",
-            &ENCODE_FPS.to_string(),
-            "-b:v",
-            &ENCODE_BITRATE.to_string(),
-            "-pix_fmt",
-            output_format,
+    command.args([
+        "-bf",
+        "0",
+        "-g",
+        &ENCODE_FPS.to_string(),
+        "-b:v",
+        &ENCODE_BITRATE.to_string(),
+        "-pix_fmt",
+        output_format,
+    ]);
+    if framed {
+        command.args(["-bsf:v", "h264_metadata=aud=insert", "-f", "h264"]);
+    } else {
+        command.args([
             "-f",
             "mpegts",
             "-mpegts_flags",
@@ -654,10 +684,10 @@ fn stream_h264_input(
             "0",
             "-muxpreload",
             "0",
-            "-flush_packets",
-            "1",
-            "pipe:1",
-        ])
+        ]);
+    }
+    let mut ffmpeg = command
+        .args(["-flush_packets", "1", "pipe:1"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -737,13 +767,25 @@ fn stream_h264_input(
             ("height", &super::H264_HEIGHT.to_string()),
             ("fps", &ENCODE_FPS.to_string()),
             ("encoder", &encoder_name),
+            ("transport", if framed { "h264_frames" } else { "mpegts" }),
         ],
     );
 
-    stream.set_write_timeout(Some(LEGACY_STALL_TIMEOUT))?;
+    let max_age = if framed {
+        windowdeck_protocol::queue::MAX_AGE
+    } else {
+        LEGACY_STALL_TIMEOUT
+    };
+    stream.set_write_timeout(Some(max_age))?;
     let (queued, receiver) = windowdeck_protocol::queue::channel();
-    let reader = thread::spawn(move || read_encoded_output(output, queued));
-    let result = send_h264_stream(EncodedQueue::new(receiver), stream, session_id);
+    let reader = thread::spawn(move || read_encoded_output(output, queued, max_age));
+    let input = EncodedQueue::new(receiver, max_age);
+    let result = if framed {
+        super::annex_b::send(input, stream, session_id, super::stop_requested)
+            .map_err(AnyError::from)
+    } else {
+        send_h264_stream(input, stream, session_id)
+    };
     let status = {
         let mut child = encoder
             .child
@@ -777,6 +819,7 @@ fn stream_h264_input(
 fn read_encoded_output(
     mut output: impl Read,
     queued: mpsc::SyncSender<windowdeck_protocol::queue::Queued<Vec<u8>>>,
+    max_age: Duration,
 ) -> io::Result<()> {
     let mut timings = windowdeck_diagnostics::Timings::default();
     let mut report = Instant::now();
@@ -786,7 +829,7 @@ fn read_encoded_output(
         let count = output.read(&mut bytes)?;
         timings.record(started.elapsed());
         bytes.truncate(count);
-        windowdeck_protocol::queue::send_with_timeout(&queued, bytes, LEGACY_STALL_TIMEOUT)?;
+        windowdeck_protocol::queue::send_with_timeout(&queued, bytes, max_age)?;
         if count == 0 {
             return Ok(());
         }
@@ -801,14 +844,19 @@ struct EncodedQueue {
     receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>,
     pending: io::Cursor<Vec<u8>>,
     ended: bool,
+    max_age: Duration,
 }
 
 impl EncodedQueue {
-    fn new(receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>) -> Self {
+    fn new(
+        receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>,
+        max_age: Duration,
+    ) -> Self {
         Self {
             receiver,
             pending: io::Cursor::new(Vec::new()),
             ended: false,
+            max_age,
         }
     }
 }
@@ -831,7 +879,7 @@ impl Read for EncodedQueue {
                     "encoder stopped or encoded queue expired",
                 )
             })?;
-        let item = item.into_fresh_within(LEGACY_STALL_TIMEOUT)?;
+        let item = item.into_fresh_within(self.max_age)?;
         self.ended = item.is_empty();
         self.pending = io::Cursor::new(item);
         self.pending.read(bytes)
@@ -1154,12 +1202,18 @@ mod tests {
             .collect();
         let expected = input.clone();
         let (sender, receiver) = windowdeck_protocol::queue::channel();
-        let producer = thread::spawn(move || read_encoded_output(input.as_slice(), sender));
+        let producer = thread::spawn(move || {
+            read_encoded_output(input.as_slice(), sender, LEGACY_STALL_TIMEOUT)
+        });
         let mut output = PausedWriter {
             bytes: Vec::new(),
             paused: false,
         };
-        let result = send_h264_stream(EncodedQueue::new(receiver), &mut output, 42);
+        let result = send_h264_stream(
+            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT),
+            &mut output,
+            42,
+        );
         producer.join().unwrap().unwrap();
         assert_eq!(result.unwrap(), (expected.len() as u64, 9));
 
@@ -1193,7 +1247,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            EncodedQueue::new(receiver)
+            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT)
+                .read(&mut [0; 8])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+    }
+
+    #[test]
+    fn framed_h264_rejects_delayed_bytes_before_the_legacy_limit() {
+        let (sender, receiver) = windowdeck_protocol::queue::channel();
+        sender
+            .send(windowdeck_protocol::queue::Queued {
+                produced: Instant::now() - Duration::from_millis(300),
+                value: vec![1, 2, 3],
+            })
+            .unwrap();
+        assert_eq!(
+            EncodedQueue::new(receiver, windowdeck_protocol::queue::MAX_AGE)
                 .read(&mut [0; 8])
                 .unwrap_err()
                 .kind(),

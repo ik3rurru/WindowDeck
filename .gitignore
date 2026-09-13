@@ -2,6 +2,8 @@
 /.flatpak-builder/
 /build-flatpak/
 /repo-flatpak/
+/WindowDeck.flatpak
+/WindowDeck-SteamDeck-*.tar.gz
 *.pdb
 *.log
 .idea/

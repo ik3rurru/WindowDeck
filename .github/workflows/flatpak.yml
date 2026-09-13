@@ -1,6 +1,7 @@
 name: Flatpak
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [main]
@@ -8,9 +9,14 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/windowdeck-client/**
+      - crates/windowdeck-media/**
       - crates/windowdeck-diagnostics/**
       - crates/windowdeck-protocol/**
-      - packaging/flatpak/**
+      - packaging/**
+      - assets/WindowDeck.png
+      - scripts/install-steamdeck.sh
+      - scripts/package-steamdeck.sh
+      - .gitattributes
       - .github/workflows/flatpak.yml
 
 permissions:
@@ -30,3 +36,11 @@ jobs:
           manifest-path: packaging/flatpak/io.github.ik3rurru.WindowDeck.yml
           cache-key: flatpak-builder-${{ github.sha }}
           artifact-name: WindowDeck-flatpak
+      - name: Package Steam Deck installer
+        id: installer
+        run: echo "archive=$(bash scripts/package-steamdeck.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WindowDeck-steamdeck
+          path: ${{ steps.installer.outputs.archive }}
+          if-no-files-found: error

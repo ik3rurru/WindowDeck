@@ -3,6 +3,10 @@
 Fecha: 10 de septiembre de 2026. Estado: aceptado para consolidar el prototipo.
 No decide el IPC definitivo ni acredita la ruta GPU en la Deck.
 
+Revisión del 12 de septiembre: [ADR 0019](0019-cpu-integrated-player.md) añade
+el transporte por unidades de acceso para el cliente integrado manteniendo
+la captura CPU. La decisión MPEG-TS siguiente describe el punto de control original.
+
 ## Evidencia
 
 La comparación CPU/WGC del 8 de septiembre favoreció CPU en la valoración del
@@ -21,7 +25,7 @@ automáticamente. Los ADR 0011/0012 conservan su decisión provisional de IPC.
 - `windowdeck-host --driver-h264 [DIRECCION]` es la ruta soportada del prototipo.
   Sin argumentos se usa esa misma ruta. Conserva CPU, libx264, MPEG-TS, resolución,
   bitrate, temporización y el límite de bloqueo de diez segundos de la corrección.
-- El panel utiliza CPU por defecto. `scripts/WindowDeck.ps1 -Native` selecciona
+- El panel utiliza CPU por defecto. `WindowDeck.exe --native` selecciona
   explícitamente el experimento GPU y requiere `native-media`. Se retira el
   switch redundante `-Legacy`; abrir el panel sin switches cumple esa función.
 - Los ensayos y las rutas históricas se agrupan bajo `windowdeck-host diag`.

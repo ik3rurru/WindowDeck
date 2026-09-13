@@ -1,4 +1,139 @@
-# Punto de continuación — 10 de septiembre de 2026
+# Punto de continuación — 13 de septiembre de 2026
+
+## Distribución Windows/Steam Deck
+
+El usuario solicita publicar todo lo nuevo, limpiar sobrantes y distribuir
+Windows y Flatpak, con acceso automático del escritorio e integración con Steam.
+Se conserva la aceptación de vídeo CPU y lanzador del día 12.
+
+Implementado: workflow de release por etiqueta, ZIP Windows con fuentes del
+commit, Flatpak con icono/metadatos, paquete Steam Deck con instalador que crea
+el acceso XDG y `~/.local/bin/windowdeck`. La guía y la investigación de formatos
+están en [steamdeck-distribution.md](steamdeck-distribution.md).
+
+Se retiraron el VBS y panel PowerShell anteriores y la copia duplicada de la
+imagen de la raíz. Las propuestas de `mejoras.txt` se archivaron en
+`docs/archive/mejoras-propuestas-2026-09-08.txt`. Se conservan las evidencias,
+paquetes y respaldo del driver de `target/`.
+
+Validación local: 46 pruebas Rust en cada configuración, formato y Clippy,
+regresión H.264 con FFmpeg, pruebas sintéticas del cliente, arnés del panel y
+ZIP Windows extraído con PATH acotado. Los siete casos del instalador pasan
+en la Deck con perfiles temporales, sin cambiar su Flatpak. Detalle en
+[testing.md](testing.md#distribución--13-de-septiembre-de-2026).
+
+Publicación preparada como `v0.2.0` preliminar; falta confirmar el resultado
+remoto del workflow y sus descargas. No confundir ese paso con instalación
+limpia ni aceptación de vídeo en modo juego, todavía pendientes.
+
+## Historial — 12 de septiembre de 2026
+
+## Vídeo CPU y lanzador aceptados en la Deck
+
+Resultado del 12 de septiembre: el usuario acepta la latencia con el
+reproductor integrado y confirma que Detener devuelve las ventanas al PC.
+También se verificaron retirada del monitor y recogida de procesos al terminar
+el panel inesperadamente, reconexión de la misma instancia de la Deck tras
+reabrirlo y una segunda parada limpia. Al terminar no quedan procesos de sesión
+ni monitor virtual. Los accesos directos existentes abren las versiones nuevas.
+Detalles, hashes y alcance de las pruebas en la sección del día 12 de `testing.md`.
+
+Quedan pendientes cancelación real de UAC, otras escalas DPI, sesión prolongada
+e instalación limpia. No se ha modificado el driver ni validado la ruta GPU.
+Los cambios siguen en el árbol de trabajo, sin commit ni publicación.
+
+Se retomó la aceptación del lanzador Rust con la Deck disponible. El paquete
+`WindowDeck-0.2.0-5123194d4c2e469483928d7367788ce3` pasó Iniciar/UAC, descubrimiento
+mDNS y activación de vídeo CPU H.264 1280 × 800. El usuario observó demasiado
+retraso, que se reprodujo al cerrar y abrir completamente el cliente. No dar
+la latencia por aceptada ni sustituir esta valoración por los FPS del encoder.
+
+El Flatpak anterior conservaba el commit
+`a78bd7428e8b9d8be77f387a329ceb610a57e019afaa4b1d7b65d4073199e681` y usa FFplay 7.1.3.
+La comparación temporal con `-threads 1 -filter_threads 1` mejoró claramente
+según el usuario, pero la latencia seguía siendo excesiva. Esos dos ajustes
+están añadidos al código Rust del cliente y pasan formato, Clippy y las 41
+pruebas tanto base como nativas antes del cambio de transporte del host.
+
+El ensayo con `-vf setpts=0` también mejoró, pero el usuario siguió observando
+demasiado retraso. No se integró ese filtro. El siguiente ensayo con
+`-avioflags direct -probesize 2048` produjo numerosos errores de PPS/slices y
+se descartó. Esas sesiones ya estaban cerradas al retomar por la tarde.
+
+La implementación actual conserva captura CPU/libx264 y el perfil de vídeo,
+pero negocia H.264 por unidades de acceso con el cliente integrado; mantiene
+MPEG-TS y su margen de diez segundos para clientes anteriores. Diseño y límites:
+[ADR 0019](adr/0019-cpu-integrated-player.md). El host nuevo pasó una sesión
+de compatibilidad con el cliente 0.1.0 antes de actualizarlo.
+
+Se instaló el Flatpak nativo de CI, fuentes `ae6fcb6fa7311f9b75bdaefc22f0ca932e01c1a2`,
+commit Flatpak `29c2e47f646b5ed8b710354ca10d5bceeb2d51b4b47c05372afc06a19016d4a0`.
+La copia anterior está en `/home/deck/Downloads/windowdeck-before-native-20260912.flatpak`.
+No se modificó el driver. El acceso directo existente selecciona el reproductor
+integrado automáticamente porque utiliza descubrimiento y el cliente tiene `native-media`.
+
+Paquete de la prueba: `target/WindowDeck-0.2.0-37a30a1942174e3fab15b72378ca103e.zip`,
+evidencias en `target/launcher-deck-e2e7a530894b4e66982cf0a7303a9941/`.
+Se observan `h264_frames`, renderer OpenGL y decoder VAAPI en la Deck.
+La recuperación final está en `target/launcher-deck-d7ef341b254c4549a1567d0fc7010396/`.
+`target/launcher-deck-current.txt` señala esa prueba ya cerrada; una nueva sesión
+requiere Start, no Restart sobre su panel terminado. El paquete con documentación
+actualizada queda indicado por `target/launcher-package-current.txt`; sus binarios
+deben conservar los hashes del paquete probado. No confundir métricas internas
+con latencia completa ni aceptación visual.
+
+Evidencias: `target/launcher-deck-7591a6b538b74efc89dbf5231a56fb54/`.
+El arnés local `target/launcher-deck-check.ps1` permite Inspect/Stop/Close/Crash
+y verifica la identidad del panel por PID, fecha de creación y ejecutable.
+SSH autorizado de pruebas: `deck@192.168.1.18`, clave `~/.ssh/steamdeck_key`.
+Los registros remotos están en `/home/deck/Downloads/windowdeck-launcher-*.log`.
+Para cerrar una prueba, consultar `flatpak ps --columns=instance,application,pid`
+y terminar su instancia concreta: detener la unidad temporal de systemd no
+garantiza cerrar el proceso Flatpak, que puede continuar en su propio scope.
+
+Las capturas del reloj acotan el retraso en instantes concretos, incluyen la
+instrumentación y no miden el barrido físico de la pantalla. La primera captura
+útil da un límite superior de 572 ms; con un hilo de decoder/filtros, 366 ms.
+No presentar esos límites de una sola muestra como promedios ni como una mejora
+porcentual controlada. La estimación inicial de transporte usa relojes con un
+desfase inestable y no acredita una latencia precisa de red.
+
+## Punto de control — 11 de septiembre de 2026
+
+## Entrega actual: lanzador Rust
+
+Se retomó la siguiente entrega indicada abajo: migrar el panel a
+`crates/windowdeck-launcher`. Están implementados los tres botones, estados,
+elevación del gestor del broker, cancelación y recogida de procesos mediante
+Job Objects y conexión local ligada al panel. CPU sigue siendo predeterminada;
+`--native` es explícito. El paquete abre `WindowDeck.exe`; el ejecutable de
+desarrollo es `target/release/windowdeck-launcher.exe`. Registros en
+`%LOCALAPPDATA%/WindowDeck/logs/`; acceso directo mediante
+`scripts/install-shortcut.ps1`. Diseño y límites en ADR 0018.
+
+El arnés de interfaz verifica apertura, controles accesibles, icono, segunda
+instancia y cierre sin iniciar host ni broker. Las pruebas del workspace cubren
+la nueva CLI, estados tardíos, salida fragmentada, pérdida de conexión local y
+recogida de hijos propios. Consultar la sección del 11 de septiembre en
+`testing.md` para la validación final y los artefactos.
+
+También pasaron el ciclo real Iniciar/UAC/host en espera/Detener y la terminación
+inesperada del panel con recogida de host y broker. No hubo cliente conectado ni
+monitor activo. `--verify` devolvió 4 al terminar; no quedaron procesos de sesión.
+
+Paquete probado: `target/WindowDeck-0.2.0-5123194d4c2e469483928d7367788ce3.zip`,
+también señalado por `target/launcher-package-current.txt`. Su `WindowDeck.exe`
+pasó Iniciar/UAC/espera/Detener; hashes y versión comprobados. El acceso directo
+del escritorio ya abre `target/release/windowdeck-launcher.exe`. Los cambios
+quedan en el árbol de trabajo, sin commit ni publicación.
+
+No confundir estos ensayos con la aceptación de vídeo en la Deck o con una
+instalación limpia. Se conservan `.vbs` y panel PowerShell hasta esa aceptación.
+Los pasos pendientes son completar el ciclo con vídeo del nuevo panel y sus fallos,
+probar otras escalas DPI y la instalación limpia; después continúa el bloque
+de emparejamiento/cifrado. Driver y perfiles de vídeo no se modifican.
+
+## Punto de control anterior — 10 de septiembre
 
 Actualización del 10 de septiembre: el usuario ha pedido implementar `mejoras.txt`
 y reanudar este trabajo. El estado actual es [WindowDeck 0.2.0](mejoras-implementadas.md).

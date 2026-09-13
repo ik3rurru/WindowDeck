@@ -8,6 +8,8 @@ use windowdeck_protocol::{
     ConnectionEvent, ConnectionState, Message, VideoCodec, read_message, write_message,
 };
 
+#[cfg(any(windows, test))]
+mod annex_b;
 #[cfg(windows)]
 mod capture;
 mod cli;
@@ -369,8 +371,14 @@ fn capture_stream(
 ) -> Result<(), AnyError> {
     let index = match target {
         CaptureTarget::WindowDeckNative => return capture::stream_native_h264(stream, session_id),
-        CaptureTarget::WindowDeckCpu if codec == VideoCodec::H264 => {
-            return capture::stream_driver_h264(stream, session_id);
+        CaptureTarget::WindowDeckCpu
+            if matches!(codec, VideoCodec::H264 | VideoCodec::H264Frames) =>
+        {
+            return capture::stream_driver_h264(
+                stream,
+                session_id,
+                codec == VideoCodec::H264Frames,
+            );
         }
         CaptureTarget::WindowDeckCpu => return Err("WindowDeck requiere H.264".into()),
         CaptureTarget::WindowDeck | CaptureTarget::WindowDeckAuto if codec == VideoCodec::H264 => {
@@ -384,7 +392,7 @@ fn capture_stream(
     match codec {
         VideoCodec::Rgb332 => capture::stream(stream, index, session_id),
         VideoCodec::H264 => capture::stream_h264(stream, index, session_id),
-        VideoCodec::H264Frames => Err("H.264 integrado requiere --driver-native-h264".into()),
+        VideoCodec::H264Frames => Err("H.264 integrado requiere la captura del driver".into()),
     }
 }
 

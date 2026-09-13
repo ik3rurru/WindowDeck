@@ -18,12 +18,12 @@ de CLI, lanzador y empaquetado que comparten interfaces.
 - Actualizar `WINDOWDECK_ROADMAP.md` y los ADRs cuando una decisión tomada
   aquí cambie una recomendación anterior.
 
-## Estado de la consolidación — 10 de septiembre de 2026
+## Estado de la consolidación — 12 de septiembre de 2026
 
 | Bloque | Estado |
 | --- | --- |
 | 1 | Implementado: CPU recomendada, diagnósticos en `diag`, referencias históricas congeladas y guía de desarrollo. ADR 0016. |
-| 2 | Pendiente: migrar el panel PowerShell y su gestión de procesos a Rust. |
+| 2 | Implementado en Rust y empaquetado (ADR 0018). Vídeo CPU integrado, latencia y retorno de ventanas aceptados en la Deck; cierre inesperado y reconexión comprobados (ADR 0019). Pendientes UAC cancelado, otras escalas DPI e instalación limpia. |
 | 3 | Pendiente: comparación de las rutas CPU/GPU completas en la Deck y decisión de IPC. |
 | 4 | Documentación actualizada; autenticación y cifrado pendientes. |
 | 5 | Distribución junto al ejecutable e integración FFI existentes documentadas en ADR 0017; instalación limpia pendiente. |
@@ -63,24 +63,31 @@ un único comando recomendado.
 
 **Motivo:** Microsoft prevé deshabilitar VBScript por defecto alrededor de 2027;
 su [calendario](https://techcommunity.microsoft.com/blog/windows-itpro-blog/vbscript-deprecation-timelines-and-next-steps/4148301)
-no fija una retirada anticipada general para 24H2/25H2. La lógica a migrar está
-en `scripts/WindowDeck.ps1`; el `.vbs` solo lo abre.
+no fija una retirada anticipada general para 24H2/25H2. La lógica estaba
+en `scripts/WindowDeck.ps1`; el `.vbs` solo lo abría. Ambos se retiraron el 13
+de septiembre al preparar la publicación; se conservan en el historial Git.
 
 Tareas:
 
-- Crear el crate `crates/windowdeck-launcher` (binario, no biblioteca).
-- Elegir GUI mediante un prototipo de arranque, memoria, DPI y cierre. Evaluar
+- [x] Crear el crate `crates/windowdeck-launcher` (binario, no biblioteca).
+- [x] Elegir GUI mediante un prototipo de arranque, memoria, DPI y cierre. Evaluar
   `native-windows-gui` y `egui`/`eframe`; el cliente actual utiliza SDL, así que
-  no se presupone una unificación de interfaz por elegir egui.
-- Replicar Iniciar, Detener, Ver registros y los estados del panel PowerShell,
+  no se presupone una unificación de interfaz por elegir egui. Elegida NWG;
+  medición local a 96 DPI y alcance de la evaluación en ADR 0018.
+- [x] Replicar Iniciar, Detener, Ver registros y los estados del panel PowerShell,
   incluidos elevación, errores, cancelación y recogida de procesos propios.
-- Compilar como `.exe` con icono propio.
-- Añadir el crate a `Cargo.toml` (`members`) y heredar
+- [x] Compilar como `.exe` con icono propio.
+- [x] Añadir el crate a `Cargo.toml` (`members`) y heredar
   `workspace.lints`.
-- Sustituir las referencias al `.vbs` en README, `packaging/windows/README.md`,
+- [x] Sustituir las referencias al `.vbs` en README, `packaging/windows/README.md`,
   `scripts/package-windows.ps1` y accesos directos por el nuevo binario.
-- Eliminar `WindowDeck.vbs` solo después de confirmar el reemplazo en una
-  instalación limpia.
+- [x] Confirmar Iniciar/UAC/conectar/Detener, cierre inesperado y reconexión con
+  vídeo CPU en la Deck. Latencia y retorno de ventanas aceptados el 12 de septiembre.
+- [ ] Cancelar UAC realmente y probar escalas 150/200 %.
+- [x] Retirar el panel PowerShell/VBS de las fuentes actuales y la distribución,
+  por la limpieza solicitada el 13 de septiembre tras aceptar el ciclo en la Deck.
+- [ ] Validar el paquete Rust en una instalación limpia; la retirada anterior
+  no acredita esta prueba.
 
 Criterio de aceptación: doble clic en el `.exe` reproduce exactamente el
 panel actual de PowerShell, y `cargo clippy --workspace` cubre también el

@@ -15,13 +15,16 @@ ese equipo. Los 60 Hz configurados no garantizan 60 imágenes nuevas por segundo
 
 ## Empezar
 
+Descarga los paquetes de Windows y Steam Deck desde
+[GitHub Releases](https://github.com/ik3rurru/WindowDeck/releases).
+
 Necesitas Windows 11 con el [driver de prueba de WindowDeck instalado](driver/windows-idd/README.md),
 el paquete completo de Windows y el cliente Flatpak en la Deck, ambos en una LAN
 de confianza. El paquete incluye FFmpeg y sus DLL; no requiere instalarlos por
 separado ni modificar el PATH. El driver sigue utilizando firma de desarrollo;
 el paquete de la aplicación no lo instala.
 
-1. Descomprime el paquete Windows y abre **`WindowDeck.vbs`** sin ejecutar como
+1. Descomprime el paquete Windows y abre **`WindowDeck.exe`** sin ejecutar como
    administrador. Pulsa **Iniciar** y acepta la elevación del broker.
 2. Abre **WindowDeck** en el modo escritorio de la Steam Deck. El descubrimiento
    automático localiza el PC; si encuentra varios, permite elegirlo.
@@ -31,10 +34,24 @@ el paquete de la aplicación no lo instala.
 El panel muestra el estado de conexión y permite abrir los registros. El host
 se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
-El cliente ya instalado en la Deck sigue siendo compatible. Para una instalación
-nueva, el workflow [Flatpak](https://github.com/ik3rurru/WindowDeck/actions/workflows/flatpak.yml)
-genera el artefacto `WindowDeck-flatpak`. Descomprímelo y abre `WindowDeck.flatpak`
-en el modo escritorio, o ejecuta:
+El host negocia vídeo con el reproductor integrado; los clientes anteriores
+siguen siendo compatibles mediante MPEG-TS. En la Deck, extrae el paquete
+`WindowDeck-0.2.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+
+```bash
+bash install-steamdeck.sh
+```
+
+Instala el Flatpak y crea automáticamente el acceso del escritorio y
+`~/.local/bin/windowdeck`. En Steam, utiliza **Añadir un producto que no es de
+Steam** y selecciona **WindowDeck**, o busca ese ejecutable; no fuerces Proton.
+Aparecerá en **Fuera de Steam** del modo juego. Véase la
+[guía de Steam Deck y comparación de formatos](docs/steamdeck-distribution.md).
+La aceptación de vídeo en modo juego sigue pendiente.
+
+También puedes abrir solo `WindowDeck.flatpak` con Discover o instalarlo
+directamente; esta vía crea la entrada del menú. Para añadir después el acceso
+del escritorio, ejecuta `bash install-steamdeck.sh --shortcuts-only`.
 
 ```bash
 flatpak install --user ./WindowDeck.flatpak
@@ -42,10 +59,11 @@ flatpak run io.github.ik3rurru.WindowDeck --fullscreen
 ```
 
 Si mDNS no está disponible, admite una dirección manual:
-`flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --h264-test --fullscreen`.
+`flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --native --fullscreen`.
+El cliente anterior utiliza `--h264-test` en lugar de `--native`.
 Cerrar la X cancela la reconexión; F11 alterna pantalla completa y Escape vuelve
-al modo ventana. El launcher Rust está pendiente; el panel actual está en
-PowerShell y el `.vbs` lo abre.
+al modo ventana. El panel de Windows y la gestión de sus procesos están en Rust.
+El acceso directo de Windows se crea con `scripts/install-shortcut.ps1`.
 
 ## Seguridad actual
 

@@ -4,6 +4,19 @@
 
 Estado de consolidación (2026-09-10): la ruta soportada del prototipo es driver → CPU/libx264 → Steam Deck y es la opción predeterminada del host y del panel. Las pruebas y rutas históricas se ejecutan mediante `windowdeck-host diag`; la ruta GPU nativa sigue siendo experimental y requiere validación completa en la Deck. El orden del trabajo pendiente está en la [roadmap de consolidación](windowdeck-roadmap-consolidacion.md), con las decisiones actuales en los [ADR 0016](docs/adr/0016-supported-video-routes.md) y [0017](docs/adr/0017-media-packaging.md). Los objetivos de esta hoja de ruta siguen siendo requisitos, no una lista de funciones ya entregadas.
 
+Actualización del 11 de septiembre: `windowdeck-launcher` implementa el panel
+y la gestión de procesos en Rust; el paquete abre `WindowDeck.exe`. La validación
+automatizada cubre apertura, controles y cierre. La aceptación completa con la
+Deck, otras escalas DPI e instalación limpia siguen abiertas; véase el
+[ADR 0018](docs/adr/0018-rust-launcher.md).
+
+Actualización del 12 de septiembre: el reproductor integrado ya recibe vídeo
+del host CPU. El usuario acepta la latencia y el retorno de ventanas al detenerse.
+Se verifican cierre inesperado del panel, retirada del monitor y reconexión;
+véanse [ADR 0019](docs/adr/0019-cpu-integrated-player.md) y `docs/testing.md`.
+Continúan pendientes UAC cancelado, otras escalas DPI, sesión prolongada e
+instalación limpia. La ruta GPU conserva su estado experimental.
+
 ## 1. Visión del proyecto
 
 WindowDeck permitirá utilizar la pantalla de una Steam Deck como un monitor secundario real de un PC con Windows 11.
