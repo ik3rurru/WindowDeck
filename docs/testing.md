@@ -33,7 +33,20 @@ Validación local en Windows:
 Estas pruebas usan sockets locales, imágenes sintéticas y SDL sin ventana.
 No activan el monitor virtual ni reproducen la red real de la Deck. Falta
 repetir la prueba visual con ambos extremos actualizados, cortes de Wi-Fi y
-sesión prolongada. Los cambios no están publicados ni instalados en la Deck.
+sesión prolongada. La publicación posterior se describe a continuación; no se
+ha modificado la instalación de la Deck.
+
+Publicada [v0.2.2](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.2.2),
+commit `54eb9fc94536021772dc6b7fb0ecc4409e77418d`. Los siete trabajos del
+[workflow Release](https://github.com/ik3rurru/WindowDeck/actions/runs/34767471508)
+han pasado, incluidas ambas variantes del arnés del cliente en Windows/Linux,
+compilación y autoprueba del Flatpak y verificación del ZIP Windows extraído.
+El usuario realizará la aceptación con ambos paquetes nuevos.
+
+Las tres descargas se comprobaron también localmente: tamaño y SHA256 coinciden
+con `SHA256SUMS.txt` y los digests de GitHub. El manifiesto del ZIP confirma
+host, cliente y lanzador 0.2.2, compilación release y el commit publicado sin
+fuentes modificadas. Evidencia: `target/release-v0.2.2/verification.json`.
 
 ## Distribución — 13 de septiembre de 2026
 

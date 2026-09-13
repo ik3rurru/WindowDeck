@@ -11,11 +11,16 @@ inicialización previa del reproductor integrado, tolerancia de dos segundos a
 atascos H.264, reintentos crecientes y pausa tras tres fallos de arranque.
 El panel distingue validación, activación y envío efectivo. Ver
 [ADR 0020](adr/0020-connection-validation.md) y [testing.md](testing.md).
-El usuario ha autorizado publicar estos cambios y hará la prueba. Se prepara
-la versión preliminar 0.2.2 para Windows y Steam Deck con las notas de
-[actualización](releases/v0.2.2.md). La repetición con ambos extremos actualizados
-y la red original sigue pendiente; las pruebas locales no acreditan estabilidad
-real prolongada. La publicación se confirmará tras completar el workflow Release.
+Publicada [v0.2.2 preliminar](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.2.2),
+fuentes `54eb9fc94536021772dc6b7fb0ecc4409e77418d`. Los siete trabajos del
+[workflow Release](https://github.com/ik3rurru/WindowDeck/actions/runs/34767471508)
+terminaron correctamente: comprobaciones base/nativas en Windows/Linux, paquetes
+Windows/Deck y publicación. Las notas de [actualización](releases/v0.2.2.md)
+indican instalar ambos extremos. El usuario hará la prueba; la repetición con
+la red original sigue pendiente y las pruebas automáticas no acreditan
+estabilidad real prolongada. No se ha modificado la instalación de la Deck.
+Las tres descargas se verificaron localmente por tamaño y SHA256; el manifiesto
+Windows confirma versión y commit. Evidencia: `target/release-v0.2.2/verification.json`.
 
 ## Distribución Windows/Steam Deck
 
