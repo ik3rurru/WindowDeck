@@ -1,5 +1,11 @@
 # Mejoras implementadas — WindowDeck 0.2.0
 
+Distribución del 13 de septiembre: las mejoras se publican en
+[v0.2.1](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.2.1), con ZIP de
+Windows, Flatpak y paquete Steam Deck que crea los accesos. La
+[guía de distribución](steamdeck-distribution.md) describe instalación, Steam y
+los formatos considerados. Se retiraron los lanzadores PowerShell/VBS anteriores.
+
 Implementación del 10 de septiembre de 2026. Se conserva Rust, TCP, la ruta CPU
 y los procedimientos de suspensión/recuperación existentes. La integración
 FFmpeg/SDL se activa al compilar con `native-media`.

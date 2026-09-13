@@ -22,13 +22,25 @@ ZIP Windows extraído con PATH acotado. Los siete casos del instalador pasan
 en la Deck con perfiles temporales, sin cambiar su Flatpak. Detalle en
 [testing.md](testing.md#distribución--13-de-septiembre-de-2026).
 
-Publicación preparada como `v0.2.1` preliminar; falta confirmar el resultado
-remoto del workflow y sus descargas. El intento `v0.2.0` generó Windows y Flatpak,
+Publicada [v0.2.1 preliminar](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.2.1),
+fuentes `959b0a60d61b2f1ae2aed2c53aa176ce19b5fe6b`. Los siete trabajos del
+[workflow Release](https://github.com/ik3rurru/WindowDeck/actions/runs/34749771422)
+terminaron correctamente: pruebas base/nativas en Windows/Linux, paquetes de
+Windows/Deck y publicación. Las tres descargas tienen SHA256 contrastado con
+los digests de GitHub; además se descargaron y verificaron ambos paquetes Linux.
+Evidencia local: `target/release-v0.2.1/verification.json`.
+
+El intento `v0.2.0` generó Windows y Flatpak,
 pero no publicó la release: la captura del panel coincidía con el cierre
 automático del modo de prueba, y Git rechazó la propiedad del checkout dentro
 del contenedor. Corregidos mediante cierre solicitado por el arnés y excepción
-de propiedad acotada a esa lectura del repositorio. No confundir ese paso con instalación
+de propiedad acotada a esa lectura del repositorio. No confundir la publicación con instalación
 limpia ni aceptación de vídeo en modo juego, todavía pendientes.
+
+El Flatpak instalado en la Deck no se cambió durante esta entrega: las pruebas
+del instalador fueron aisladas. Para instalar la release y sus accesos, utilizar
+su paquete Steam Deck. Los binarios locales de las pruebas anteriores se
+conservan; reconstruir con `scripts/build-media.ps1` antes de usarlos como 0.2.1.
 
 ## Historial — 12 de septiembre de 2026
 

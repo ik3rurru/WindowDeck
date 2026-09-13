@@ -40,6 +40,26 @@ un límite de 60 segundos cierra pruebas abandonadas sin declararlas correctas.
 Se reprodujo una inspección lenta con una espera deliberada de tres segundos:
 `target/launcher-smoke-5d4b7fb632f34c3d95110d832d727c2c/`, correcta.
 
+La [release v0.2.1](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.2.1)
+quedó publicada tras los siete trabajos correctos del
+[workflow 34749771422](https://github.com/ik3rurru/WindowDeck/actions/runs/34749771422),
+commit `959b0a60d61b2f1ae2aed2c53aa176ce19b5fe6b`. Incluye los cuatro trabajos de
+CI base/nativa en Windows/Linux, el ZIP Windows verificado tras extracción,
+el Flatpak con autoprueba multimedia y metadatos, y la publicación conjunta.
+
+| Descarga | Bytes | SHA256 |
+| --- | ---: | --- |
+| `WindowDeck-0.2.1-windows-x64.zip` | 103590687 | `0b0ba07bb4a213597b24fa806298019916fe3066c545d0c8dcc8515b6c42a602` |
+| `WindowDeck-0.2.1-steamdeck-x86_64.tar.gz` | 1357427 | `d19fea38dc3fc50a0eb289a667aa6ce318a5d23b91d4c56e539d4f4bc9334b83` |
+| `WindowDeck.flatpak` | 1355112 | `75ce2659aac8a070f345365277256f731194861bc1ca253b459c34c469641c3c` |
+
+Los tres hashes de `SHA256SUMS.txt` coinciden con los digests de los assets
+publicados en GitHub. Los dos archivos Linux se descargaron y verificaron
+también localmente en `target/release-v0.2.1/`; el ZIP Windows se extrajo y probó
+en el runner de publicación. El tar conserva permiso ejecutable del instalador
+y del lanzador y referencia el commit de la release. No se modificó la instalación
+real de la Deck ni se abrió una sesión en modo juego.
+
 ## Línea base H.264 local
 
 Medición del 4 de septiembre de 2026 con host y cliente en el mismo PC Windows, monitor fuente de 2560 × 1440 y salida H.264 de 1280 × 800, 30 FPS y 4 Mbps configurados:
