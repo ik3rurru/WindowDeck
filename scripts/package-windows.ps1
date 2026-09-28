@@ -22,7 +22,7 @@ foreach ($binary in @('windowdeck-host.exe', 'windowdeck-client.exe')) {
 }
 Copy-Item -LiteralPath (Join-Path $packageRoot 'target/release/windowdeck-launcher.exe') -Destination (Join-Path $packagePath 'WindowDeck.exe')
 Copy-Item -LiteralPath (Join-Path $packageRoot 'target/windows-idd/windowdeck-display.exe') -Destination (Join-Path $packagePath 'bin')
-$packageSdk = Join-Path $packageRoot 'target/media-sdk/ffmpeg-9.0.1-full_build-shared'
+$packageSdk = Join-Path $packageRoot 'target/media-sdk/ffmpeg-9.0.2-full_build-shared'
 # Use only the pinned SDK runtime DLLs, not leftovers in target/release.
 Get-ChildItem -LiteralPath (Join-Path $packageSdk 'bin') -Filter '*.dll' -File | Copy-Item -Destination (Join-Path $packagePath 'bin')
 Copy-Item -LiteralPath (Join-Path $packageRoot 'target/media-sdk/SDL2-2.32.10/lib/x64/SDL2.dll') -Destination (Join-Path $packagePath 'bin')

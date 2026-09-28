@@ -7,7 +7,7 @@ validación en instalación limpia pendiente.
 
 La ruta soportada usa FFmpeg/libx264 en el host y FFplay en el cliente. Exigir
 su instalación manual fue útil en el prototipo, pero no es un requisito de uso
-del paquete Windows actual. `scripts/build-media.ps1` fija FFmpeg 9.0.1 y SDL
+del paquete Windows actual. `scripts/build-media.ps1` fija FFmpeg 9.0.2 y SDL
 2.32.10 con SHA256 y copia ejecutables y DLL junto al host. El Flatpak obtiene
 las dependencias multimedia mediante su runtime.
 

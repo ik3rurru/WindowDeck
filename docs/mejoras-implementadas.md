@@ -150,7 +150,7 @@ se compila localmente con WDK. CI no instala drivers ni prueba una GPU real.
 ## Versiones y empaquetado
 
 `--version` identifica host, cliente, auxiliar y FFmpeg integrado. El script de
-SDK fija FFmpeg 9.0.1 y SDL 2.32.10 mediante SHA256; Cargo utiliza `Cargo.lock`.
+SDK fija FFmpeg 9.0.2 y SDL 2.32.10 mediante SHA256; Cargo utiliza `Cargo.lock`.
 El paquete conserva licencias, código fuente del proyecto y manifiesto.
 FFmpeg incluye libx264/GPLv3; esa licencia no se sustituye por las licencias del
 código Rust de WindowDeck.

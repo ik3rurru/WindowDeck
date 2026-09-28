@@ -3,11 +3,11 @@ param([switch]$Download, [switch]$PrepareOnly)
 $ErrorActionPreference = 'Stop'
 $mediaRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $mediaSdk = Join-Path $mediaRoot 'target/media-sdk'
-$mediaFfmpeg = Join-Path $mediaSdk 'ffmpeg-9.0.1-full_build-shared'
+$mediaFfmpeg = Join-Path $mediaSdk 'ffmpeg-9.0.2-full_build-shared'
 $mediaSdl = Join-Path $mediaSdk 'SDL2-2.32.10'
 New-Item -ItemType Directory -Force -Path $mediaSdk | Out-Null
 $archives = @(
-    @{ File = 'ffmpeg.7z'; Url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-full_build-shared.7z'; Sha256 = 'CB4D5E8DB6A3353BFFDB2100D3EB4B76733457FA443215E236F57C99F9FFDCA4'; Folder = $mediaFfmpeg },
+    @{ File = 'ffmpeg.7z'; Url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build-shared.7z'; Sha256 = '4D2060A8B34A940AA47D785142055BB92A63053781E55F2ACE4546EDD519A8F5'; Folder = $mediaFfmpeg },
     @{ File = 'sdl.zip'; Url = 'https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip'; Sha256 = 'AF347939395A58B365846AAEA27391E69F9EC9D4DD650D6AC40802159B418A6E'; Folder = $mediaSdl }
 )
 foreach ($archive in $archives) {
