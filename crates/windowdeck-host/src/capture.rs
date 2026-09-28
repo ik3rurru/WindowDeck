@@ -213,6 +213,54 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
     )
 }
 
+pub fn stream_primary_h264(
+    stream: TcpStream,
+    session_id: u64,
+    framed: bool,
+) -> Result<(), AnyError> {
+    let monitor = Monitor::primary()?;
+    let device = monitor.device_name()?;
+    let handle = monitor.as_raw_hmonitor() as usize;
+    // Select the actual HMONITOR, not a DXGI output index on an assumed adapter.
+    // Scale on the GPU before downloading, bounding CPU work even on a 4K desktop.
+    let input = format!(
+        "gfxcapture=hmonitor={handle}:max_framerate={ENCODE_FPS}:capture_cursor=1:output_fmt=bgra:width={}:height={}:resize_mode=scale_aspect",
+        super::H264_WIDTH,
+        super::H264_HEIGHT,
+    );
+    emit(
+        Level::Info,
+        "mirror_capture_selected",
+        &[("device", &device), ("capture", "windows_graphics_capture")],
+    );
+    stream_h264_input(
+        stream,
+        session_id,
+        input,
+        device.clone(),
+        Some(WatchedMonitor::Primary { device, handle }),
+        None,
+        framed,
+    )
+}
+
+enum WatchedMonitor {
+    Virtual(String),
+    Primary { device: String, handle: usize },
+}
+
+impl WatchedMonitor {
+    fn active(&self) -> bool {
+        match self {
+            Self::Virtual(expected) => virtual_device_name().is_ok_and(|name| name == *expected),
+            Self::Primary { device, handle } => Monitor::primary().is_ok_and(|monitor| {
+                monitor.as_raw_hmonitor() as usize == *handle
+                    && monitor.device_name().is_ok_and(|name| name == *device)
+            }),
+        }
+    }
+}
+
 fn display_tool() -> Result<PathBuf, AnyError> {
     if let Some(path) = std::env::var_os("WINDOWDECK_DISPLAY_EXE") {
         return Ok(path.into());
@@ -392,7 +440,7 @@ pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), Any
         session_id,
         input,
         name.clone(),
-        Some(name),
+        Some(WatchedMonitor::Virtual(name)),
         None,
         false,
     )
@@ -449,7 +497,7 @@ pub fn stream_driver_h264(
         session_id,
         String::new(),
         name.clone(),
-        Some(name),
+        Some(WatchedMonitor::Virtual(name)),
         Some(input),
         framed,
     )
@@ -573,7 +621,7 @@ fn stream_h264_input(
     session_id: u64,
     input: String,
     monitor: String,
-    virtual_device: Option<String>,
+    watched_monitor: Option<WatchedMonitor>,
     raw_input: Option<std::process::ChildStdout>,
     framed: bool,
 ) -> Result<(), AnyError> {
@@ -598,7 +646,11 @@ fn stream_h264_input(
         super::H264_WIDTH,
         super::H264_HEIGHT,
     );
-    let filter = if virtual_device.is_some() {
+    let mirror = matches!(watched_monitor, Some(WatchedMonitor::Primary { .. }));
+    let filter = if mirror {
+        // gfxcapture has already scaled and letterboxed the frame on the GPU.
+        "hwdownload,format=bgra".to_owned()
+    } else if watched_monitor.is_some() {
         format!("{filter},fps={ENCODE_FPS}")
     } else {
         filter
@@ -633,6 +685,9 @@ fn stream_h264_input(
             ])
             .stdin(Stdio::from(raw_input));
     } else {
+        if mirror {
+            command.args(["-filter_threads", "1"]);
+        }
         command.args(["-f", "lavfi", "-i", &input, "-vf", &filter]);
     }
     command.args(["-an", "-c:v", &encoder_name]);
@@ -713,7 +768,7 @@ fn stream_h264_input(
         cancel,
         watcher: None,
     };
-    if let Some(expected) = virtual_device {
+    if let Some(expected) = watched_monitor {
         encoder.watcher = Some(thread::spawn(move || {
             while matches!(
                 cancelled.recv_timeout(Duration::from_millis(500)),
@@ -730,7 +785,7 @@ fn stream_h264_input(
                             | io::ErrorKind::Interrupted
                     ),
                 };
-                let active = virtual_device_name().is_ok_and(|name| name == expected);
+                let active = expected.active();
                 let stalled = last_output
                     .lock()
                     .map_or(true, |last| last.elapsed() > LEGACY_STALL_TIMEOUT);
@@ -738,7 +793,11 @@ fn stream_h264_input(
                 if disconnected || !active || stalled || stopped {
                     emit(
                         Level::Info,
-                        "virtual_capture_stopped",
+                        if mirror {
+                            "mirror_capture_stopped"
+                        } else {
+                            "virtual_capture_stopped"
+                        },
                         &[(
                             "reason",
                             if stopped {

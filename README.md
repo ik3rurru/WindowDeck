@@ -4,13 +4,14 @@
 [![Flatpak](https://github.com/ik3rurru/WindowDeck/actions/workflows/flatpak.yml/badge.svg?branch=main)](https://github.com/ik3rurru/WindowDeck/actions/workflows/flatpak.yml)
 
 WindowDeck convierte la Steam Deck en una segunda pantalla de Windows 11 a través
-de la red local. Crea un monitor virtual de 1280 × 800 a 60 Hz, permite extender el
-escritorio y retira la pantalla al terminar la sesión. El HDMI del dock es una
-salida, no una entrada.
+de la red local. Permite extender el escritorio con un monitor virtual de
+1280 × 800 a 60 Hz o **duplicar la pantalla principal de Windows sin driver
+virtual**. En extensión, retira la pantalla al terminar la sesión. El HDMI del
+dock es una salida, no una entrada.
 
 **Ruta recomendada: frames CPU del driver → H.264/libx264 → cliente de la Deck.**
 Es la ruta comprobada en la Deck y la que utiliza el panel por defecto. La
-integración GPU permanece experimental hasta validar su recorrido completo en
+codificación GPU desde el driver permanece experimental hasta validar su recorrido completo en
 ese equipo. Los 60 Hz configurados no garantizan 60 imágenes nuevas por segundo.
 
 ## Empezar
@@ -18,25 +19,30 @@ ese equipo. Los 60 Hz configurados no garantizan 60 imágenes nuevas por segundo
 Descarga los paquetes de Windows y Steam Deck desde
 [GitHub Releases](https://github.com/ik3rurru/WindowDeck/releases).
 
-Necesitas Windows 11 con el [driver de prueba de WindowDeck instalado](driver/windows-idd/README.md),
-el paquete completo de Windows y el cliente Flatpak en la Deck, ambos en una LAN
+Necesitas Windows 11, el paquete completo de Windows y el cliente Flatpak en la Deck, ambos en una LAN
 de confianza. El paquete incluye FFmpeg y sus DLL; no requiere instalarlos por
-separado ni modificar el PATH. El driver sigue utilizando firma de desarrollo;
-el paquete de la aplicación no lo instala.
+separado ni modificar el PATH. Para extender, también necesitas el
+[driver de prueba de WindowDeck instalado](driver/windows-idd/README.md).
+El driver sigue utilizando firma de desarrollo; el paquete de la aplicación
+no lo instala. Duplicar no requiere instalarlo.
 
 1. Descomprime el paquete Windows y abre **`WindowDeck.exe`** sin ejecutar como
-   administrador. Pulsa **Iniciar** y acepta la elevación del broker.
+   administrador. Elige **Extender escritorio** o **Duplicar pantalla principal**,
+   pulsa **Iniciar** y acepta el permiso. En duplicación se utiliza únicamente
+   para preparar las reglas de red.
 2. Abre **WindowDeck** en el modo escritorio de la Steam Deck. El descubrimiento
    automático localiza el PC; si encuentra varios, permite elegirlo.
-3. Mueve una ventana al escritorio extendido. Cierra el cliente o pulsa
-   **Detener** en Windows para retirar el monitor y recuperar las ventanas.
+3. En extensión, mueve una ventana al escritorio de la Deck. En duplicación,
+   verás la pantalla principal del PC, ajustada a 1280 × 800 conservando su
+   proporción. Cierra el cliente o pulsa **Detener** en Windows para terminar.
+   Solo en extensión se retira el monitor y se recuperan las ventanas.
 
 El panel muestra el estado de conexión y permite abrir los registros. El host
 se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
 El host negocia vídeo con el reproductor integrado; los clientes anteriores
 siguen siendo compatibles mediante MPEG-TS. En la Deck, extrae el paquete
-`WindowDeck-0.2.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+`WindowDeck-0.3.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
 bash install-steamdeck.sh
@@ -83,8 +89,11 @@ La entrada remota de ratón, teclado y táctil aún no está implementada.
 La [guía de desarrollo](docs/development.md) explica cómo compilar el paquete,
 iniciar la ruta CPU manualmente y ejecutar `windowdeck-host diag --help`.
 Los diagnósticos y las rutas históricas se mantienen allí, con enlaces a sus
-mediciones. La captura WGC y los prototipos RGB332 quedan congelados como
-referencias; el uso normal emplea `windowdeck-host --driver-h264`.
+mediciones. Las antiguas rutas WGC del monitor virtual y los prototipos RGB332
+quedan congelados como referencias. El uso normal emplea
+`windowdeck-host --driver-h264` para extender o `windowdeck-host --mirror` para
+duplicar. La nueva duplicación usa WGC con escalado en GPU; la mejora de carga
+y latencia frente a extensión sigue pendiente de comparación en la Deck.
 
 ```bash
 cargo fmt --check

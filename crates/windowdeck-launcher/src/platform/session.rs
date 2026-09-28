@@ -4,7 +4,7 @@ use super::{
     error, identifier, log_root,
     process::{OwnedProcess, POLL},
 };
-use crate::model::State;
+use crate::{cli::SessionMode, model::State};
 use std::{
     fs::{self, File},
     io::{self, Read},
@@ -45,12 +45,12 @@ impl Drop for Worker {
     }
 }
 
-pub fn start(native: bool) -> Worker {
+pub fn start(mode: SessionMode) -> Worker {
     let (sender, events) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
     let thread = thread::spawn(move || {
-        let result = run(native, &worker_cancel, &sender).map_err(|e| e.to_string());
+        let result = run(mode, &worker_cancel, &sender).map_err(|e| e.to_string());
         let _ = sender.send(Event::Finished(result));
     });
     Worker {
@@ -60,7 +60,7 @@ pub fn start(native: bool) -> Worker {
     }
 }
 
-fn run(native: bool, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> io::Result<()> {
+fn run(mode: SessionMode, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> io::Result<()> {
     let session = log_root()?.join(format!("launcher-{}", identifier()?));
     fs::create_dir_all(&session)?;
     let _ = events.send(Event::Session(session.clone()));
@@ -69,11 +69,11 @@ fn run(native: bool, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> io::Re
     let mut connection = None;
     let mut host = None;
     let outcome = (|| {
-        preflight(&layout, &session, native, cancel)?;
+        preflight(&layout, &session, mode, cancel)?;
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        connection = Connection::start(&layout, &session, native, cancel)?;
+        connection = Connection::start(&layout, &session, mode, cancel)?;
         let Some(connection) = connection.as_mut() else {
             return Ok(());
         };
@@ -86,16 +86,11 @@ fn run(native: bool, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> io::Re
         let _ = events.send(Event::State(State::HostStarting));
         let mut command = layout.command(&layout.host)?;
         command
-            .args([
-                if native {
-                    "--driver-native-h264"
-                } else {
-                    "--driver-h264"
-                },
-                "0.0.0.0:48150",
-            ])
-            .env("WINDOWDECK_DISPLAY_EXE", &layout.display)
+            .args([mode.host_arg(), "0.0.0.0:48150"])
             .env("WINDOWDECK_STOP_FILE", &stop);
+        if mode != SessionMode::Mirror {
+            command.env("WINDOWDECK_DISPLAY_EXE", &layout.display);
+        }
         host = Some(OwnedProcess::spawn(
             &mut command,
             &session.join("host.out"),
@@ -144,17 +139,18 @@ fn run(native: bool, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> io::Re
     result
 }
 
-fn preflight(layout: &Layout, session: &Path, native: bool, cancel: &AtomicBool) -> io::Result<()> {
+fn preflight(
+    layout: &Layout,
+    session: &Path,
+    mode: SessionMode,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     if is_elevated::is_elevated() {
         return Err(error(
             "Abre WindowDeck sin ejecutar como administrador. Solo el broker necesita elevación.",
         ));
     }
-    for file in [
-        &layout.host,
-        &layout.display,
-        &layout.bin.join("ffmpeg.exe"),
-    ] {
+    for file in required_files(layout, mode) {
         if !file.is_file() {
             return Err(error(format!(
                 "Falta {}. Usa el paquete completo de WindowDeck o compila release.",
@@ -176,7 +172,7 @@ fn preflight(layout: &Layout, session: &Path, native: bool, cancel: &AtomicBool)
         ));
     }
     let version = fs::read_to_string(session.join("host-version.txt"))?;
-    if native
+    if mode == SessionMode::Native
         && !version
             .lines()
             .any(|line| line.trim() == "native_media=true")
@@ -186,6 +182,14 @@ fn preflight(layout: &Layout, session: &Path, native: bool, cancel: &AtomicBool)
         ));
     }
     Ok(())
+}
+
+fn required_files(layout: &Layout, mode: SessionMode) -> Vec<PathBuf> {
+    let mut files = vec![layout.host.clone(), layout.bin.join("ffmpeg.exe")];
+    if mode != SessionMode::Mirror {
+        files.push(layout.display.clone());
+    }
+    files
 }
 
 #[derive(Default)]
@@ -220,6 +224,13 @@ impl StateTail {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mirror_preflight_does_not_require_a_display_helper() {
+        let layout = Layout::at(PathBuf::from(r"C:\WindowDeck\WindowDeck.exe")).unwrap();
+        assert!(!required_files(&layout, SessionMode::Mirror).contains(&layout.display));
+        assert!(required_files(&layout, SessionMode::Extend).contains(&layout.display));
+        assert!(required_files(&layout, SessionMode::Native).contains(&layout.display));
+    }
     #[test]
     fn partial_stdout_records_are_preserved_and_oversized_lines_ignored() {
         let mut tail = StateTail::default();

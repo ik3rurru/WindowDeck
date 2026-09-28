@@ -16,7 +16,9 @@ producto que no es de Steam** y selecciona **WindowDeck**. Si no aparece, pulsa
 **Buscar**, muestra todos los archivos y selecciona
 `/home/deck/.local/bin/windowdeck`. Desactiva cualquier compatibilidad forzada
 con Proton: este cliente es Linux nativo. En modo juego aparecerá en **Fuera de
-Steam**. Abre primero WindowDeck en el PC y pulsa **Iniciar**.
+Steam**. Abre primero WindowDeck en el PC, elige **Extender escritorio** o
+**Duplicar pantalla principal** y pulsa **Iniciar**. El cliente funciona igual
+en ambos modos; solo extensión requiere el driver virtual de Windows.
 
 Si añades el destino manualmente, también puedes utilizar `/usr/bin/flatpak`
 con estas opciones de lanzamiento:

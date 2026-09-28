@@ -6,6 +6,9 @@ pub(super) const HELP: &str = "WindowDeck Host
 Uso recomendado (Windows, con --frame-broker iniciado):
   windowdeck-host --driver-h264 [DIRECCION]
 
+Duplicar la pantalla principal de Windows, sin driver ni broker de pantalla:
+  windowdeck-host --mirror [DIRECCION]
+
 Sin argumentos se utiliza la misma ruta CPU H.264.
 Se negocia el reproductor integrado o MPEG-TS para clientes anteriores.
 DIRECCION predeterminada: 0.0.0.0:48150
@@ -57,6 +60,11 @@ pub(super) fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode,
             Some(CaptureTarget::WindowDeckNative),
             VideoCodec::H264Frames,
         ),
+        Some("--mirror") => serve(
+            args,
+            Some(CaptureTarget::PrimaryMonitor),
+            VideoCodec::H264Frames,
+        ),
         Some(
             "--capture-test"
             | "--encode-test"
@@ -70,7 +78,9 @@ pub(super) fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode,
         ) => Err(
             "las pruebas y rutas historicas se han movido a 'windowdeck-host diag'; consulta 'windowdeck-host diag --help'",
         ),
-        _ => Err("usa windowdeck-host --driver-h264 [DIRECCION] o consulta --help"),
+        _ => Err(
+            "usa windowdeck-host --driver-h264 [DIRECCION], --mirror [DIRECCION] o consulta --help",
+        ),
     }
 }
 
@@ -194,6 +204,33 @@ mod tests {
     }
 
     #[test]
+    fn mirror_preserves_the_physical_source_for_current_and_legacy_clients() {
+        for address in [None, Some("127.0.0.1:48151")] {
+            let mut args = vec!["--mirror"];
+            args.extend(address);
+            assert_eq!(
+                parse(&args),
+                Ok(Mode::Serve {
+                    address: address.unwrap_or(DEFAULT_ADDRESS).into(),
+                    monitor: Some(CaptureTarget::PrimaryMonitor),
+                    codec: VideoCodec::H264Frames,
+                })
+            );
+        }
+        for target in [CaptureTarget::PrimaryMonitor, CaptureTarget::WindowDeckCpu] {
+            assert_eq!(
+                super::super::legacy_capture_target(Some(target)),
+                Some(target)
+            );
+        }
+        assert_eq!(
+            super::super::legacy_capture_target(Some(CaptureTarget::WindowDeckNative)),
+            Some(CaptureTarget::WindowDeckCpu)
+        );
+        assert!(parse(&["--mirror", "--driver-h264"]).is_err());
+    }
+
+    #[test]
     fn diagnostics_select_the_existing_probes() {
         for (args, expected) in [
             (vec!["diag", "capture"], Mode::CaptureTest(1)),
@@ -278,6 +315,7 @@ mod tests {
             vec!["--help"],
             vec!["--version"],
             vec!["--driver-h264", DEFAULT_ADDRESS],
+            vec!["--mirror", DEFAULT_ADDRESS],
             vec!["--driver-native-h264", DEFAULT_ADDRESS],
             vec!["diag", "--help"],
             vec!["diag", "capture", "1"],

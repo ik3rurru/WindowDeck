@@ -20,7 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 El primer comando obtiene SDK con versión y SHA256 fijados, compila release y
 copia FFmpeg/SDL junto a los binarios. `-Download` solo descarga archivos ausentes.
 El segundo compila el auxiliar y el paquete del driver; no instala la DLL.
-El ZIP queda en `target/package-<identificador>/WindowDeck-0.2.1-windows-x64.zip` e incluye versiones,
+El ZIP queda en `target/package-<identificador>/WindowDeck-0.3.0-windows-x64.zip` e incluye versiones,
 hashes, licencias y fuentes. La validación en un Windows limpio sigue pendiente.
 `scripts/package-windows.ps1 -Release` exige un árbol limpio e incluye las
 fuentes del commit exacto. El empaquetado normal solo necesita compilar el
@@ -37,7 +37,7 @@ el instalador y los límites de la integración con Steam.
 Para ejecutar desde el repositorio, abre `target/release/windowdeck-launcher.exe`
 después de compilar. `cargo build --locked --release -p windowdeck-launcher`
 compila únicamente el panel, sin necesitar FFmpeg/SDL ni WDK. Para iniciar una
-sesión sí hacen falta el host, FFmpeg, sus DLL y el auxiliar del driver.
+sesión sí hacen falta el host, FFmpeg y sus DLL; extensión también requiere el auxiliar del driver.
 El panel utiliza CPU incluso si el binario admite `native-media`.
 
 ## Ruta CPU manual
@@ -66,6 +66,32 @@ Con el cliente nuevo, la IP manual usa `IP_DEL_PC:48150 --native`; sin direcció
 el cliente con `native-media` selecciona automáticamente el reproductor integrado.
 `--h264-test` con IP manual y `--ffplay` permiten comprobar MPEG-TS. Los clientes
 anteriores conservan `IP_DEL_PC:48150 --h264-test`.
+
+## Duplicación sin driver virtual
+
+En el panel selecciona **Duplicar pantalla principal** antes de Iniciar.
+También puedes abrir `windowdeck-launcher.exe --mirror` para preseleccionarla.
+Desde una terminal normal con FFmpeg en PATH:
+
+```powershell
+.\target\release\windowdeck-host.exe --mirror 0.0.0.0:48150
+```
+
+No requiere un broker de pantalla ni `WINDOWDECK_DISPLAY_EXE`. El host directo
+no configura el firewall; el panel sí prepara las reglas habituales de LAN.
+Se captura la principal de Windows, se escala en GPU conservando proporción
+a 1280 × 800 y se negocia el mismo vídeo H.264 que con extensión. El cliente
+no necesita opciones nuevas. Véase [ADR 0021](adr/0021-primary-screen-mirroring.md).
+
+Prueba manual local con el escritorio desbloqueado y FFmpeg/ffprobe en PATH:
+
+```powershell
+python scripts/test-mirror-host.py --host target/debug/windowdeck-host.exe
+```
+
+Comprueba captura real, decodificación integrada/MPEG-TS, reconexión y Detener.
+El vídeo permanece en memoria; no se guarda. Escucha solo en loopback y fuerza
+una ruta inexistente para el auxiliar del driver. No mide latencia física.
 
 ## CLI de diagnóstico
 

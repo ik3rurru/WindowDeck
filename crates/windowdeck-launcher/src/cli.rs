@@ -1,20 +1,59 @@
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub const HELP: &str = "WindowDeck Launcher
-Uso: windowdeck-launcher [--native]
+Uso: windowdeck-launcher [--native | --mirror]
      windowdeck-launcher --help | --version
      windowdeck-launcher --ui-smoke-test DIRECTORIO
 
 Sin opciones: panel de Windows, ruta CPU/libx264.
 --native: ruta GPU experimental (requiere native-media).
+--mirror: preselecciona duplicar la pantalla principal, sin driver virtual.
 --ui-smoke-test: abre y cierra el panel sin iniciar una sesión; guarda medidas locales.";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionMode {
+    #[default]
+    Extend,
+    Native,
+    Mirror,
+}
+
+#[cfg(any(windows, test))]
+impl SessionMode {
+    pub fn host_arg(self) -> &'static str {
+        match self {
+            Self::Extend => "--driver-h264",
+            Self::Native => "--driver-native-h264",
+            Self::Mirror => "--mirror",
+        }
+    }
+
+    pub fn broker_arg(self) -> &'static str {
+        match self {
+            Self::Extend => "cpu",
+            Self::Native => "gpu",
+            Self::Mirror => "mirror",
+        }
+    }
+
+    pub fn display_brokers(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Extend => &[("--frame-broker", "broker")],
+            Self::Native => &[
+                ("--gpu-frame-broker", "broker"),
+                ("--frame-broker", "cpu-broker"),
+            ],
+            Self::Mirror => &[],
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Help,
     Version,
     Panel {
-        native: bool,
+        mode: SessionMode,
         smoke: Option<PathBuf>,
     },
     Broker(BrokerOptions),
@@ -25,19 +64,20 @@ pub struct BrokerOptions {
     pub address: SocketAddr,
     pub token: String,
     pub session: PathBuf,
-    pub native: bool,
+    pub mode: SessionMode,
 }
 
 pub fn parse(args: impl Iterator<Item = OsString>) -> Result<Mode, &'static str> {
     let args: Vec<_> = args.collect();
-    let panel = |native, smoke| Ok(Mode::Panel { native, smoke });
+    let panel = |mode, smoke| Ok(Mode::Panel { mode, smoke });
     match args.as_slice() {
-        [] => panel(false, None),
+        [] => panel(SessionMode::Extend, None),
         [arg] if arg == "--help" || arg == "-h" => Ok(Mode::Help),
         [arg] if arg == "--version" || arg == "-V" => Ok(Mode::Version),
-        [arg] if arg == "--native" => panel(true, None),
+        [arg] if arg == "--native" => panel(SessionMode::Native, None),
+        [arg] if arg == "--mirror" => panel(SessionMode::Mirror, None),
         [arg, path] if arg == "--ui-smoke-test" && !path.is_empty() => {
-            panel(false, Some(path.into()))
+            panel(SessionMode::Extend, Some(path.into()))
         }
         [arg, address, token, session, route] if arg == "--broker" => {
             let address: SocketAddr = address
@@ -54,10 +94,12 @@ pub fn parse(args: impl Iterator<Item = OsString>) -> Result<Mode, &'static str>
             if !session.is_absolute() {
                 return Err("La carpeta de sesión debe ser absoluta");
             }
-            let native = if route == "gpu" {
-                true
+            let mode = if route == "gpu" {
+                SessionMode::Native
             } else if route == "cpu" {
-                false
+                SessionMode::Extend
+            } else if route == "mirror" {
+                SessionMode::Mirror
             } else {
                 return Err("Ruta interna inválida");
             };
@@ -65,7 +107,7 @@ pub fn parse(args: impl Iterator<Item = OsString>) -> Result<Mode, &'static str>
                 address,
                 token,
                 session,
-                native,
+                mode,
             }))
         }
         _ => Err("Argumentos inválidos"),
@@ -83,25 +125,60 @@ mod tests {
         assert_eq!(
             parse_str(&[]),
             Ok(Mode::Panel {
-                native: false,
+                mode: SessionMode::Extend,
                 smoke: None
             })
         );
         assert_eq!(
             parse_str(&["--native"]),
             Ok(Mode::Panel {
-                native: true,
+                mode: SessionMode::Native,
                 smoke: None
             })
         );
         for args in [
             &["--native", "--native"][..],
+            &["--native", "--mirror"],
             &["--version", "--native"],
             &["--broker"],
             &["-Native"],
             &["--ui-smoke-test", ""],
         ] {
             assert!(parse_str(args).is_err());
+        }
+    }
+    #[test]
+    fn mirroring_never_starts_a_display_broker() {
+        assert_eq!(
+            parse_str(&["--mirror"]),
+            Ok(Mode::Panel {
+                mode: SessionMode::Mirror,
+                smoke: None,
+            })
+        );
+        assert!(SessionMode::Mirror.display_brokers().is_empty());
+        assert_eq!(SessionMode::Mirror.host_arg(), "--mirror");
+        assert_eq!(
+            SessionMode::Extend.display_brokers(),
+            &[("--frame-broker", "broker")]
+        );
+        assert_eq!(SessionMode::Native.display_brokers().len(), 2);
+        let path = std::env::temp_dir();
+        for mode in [
+            SessionMode::Extend,
+            SessionMode::Native,
+            SessionMode::Mirror,
+        ] {
+            let Ok(Mode::Broker(options)) = parse_str(&[
+                "--broker",
+                "127.0.0.1:12345",
+                "0123456789abcdef0123456789abcdef",
+                path.to_str().unwrap(),
+                mode.broker_arg(),
+            ]) else {
+                panic!("valid broker mode")
+            };
+            assert_eq!(options.mode, mode);
         }
     }
     #[test]

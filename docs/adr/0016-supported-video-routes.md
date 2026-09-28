@@ -3,6 +3,10 @@
 Fecha: 10 de septiembre de 2026. Estado: aceptado para consolidar el prototipo.
 No decide el IPC definitivo ni acredita la ruta GPU en la Deck.
 
+Revisión del 28 de septiembre: [ADR 0021](0021-primary-screen-mirroring.md)
+añade `--mirror` como opción independiente para duplicar la pantalla principal
+sin driver. Las rutas históricas del monitor virtual siguen congeladas.
+
 Revisión del 12 de septiembre: [ADR 0019](0019-cpu-integrated-player.md) añade
 el transporte por unidades de acceso para el cliente integrado manteniendo
 la captura CPU. La decisión MPEG-TS siguiente describe el punto de control original.

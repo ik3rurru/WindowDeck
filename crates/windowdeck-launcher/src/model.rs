@@ -1,3 +1,5 @@
+use crate::cli::SessionMode;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum State {
     #[default]
@@ -52,6 +54,7 @@ impl State {
 #[derive(Default)]
 pub struct Panel {
     pub state: State,
+    pub mode: SessionMode,
     pub failure: Option<String>,
 }
 
@@ -78,7 +81,23 @@ impl Panel {
     }
 
     pub fn text(&self) -> &str {
-        self.failure.as_deref().unwrap_or(self.state.text())
+        if let Some(failure) = &self.failure {
+            return failure;
+        }
+        if self.mode == SessionMode::Mirror {
+            match self.state {
+                State::Starting => {
+                    return "Iniciando. Acepta el permiso para preparar el acceso de red...";
+                }
+                State::Activating => {
+                    return "Conexión preparada. Iniciando la captura de la pantalla principal...";
+                }
+                State::Streaming => return "Deck conectada. Duplicando la pantalla principal.",
+                State::Stopping => return "Deteniendo la transmisión...",
+                _ => {}
+            }
+        }
+        self.state.text()
     }
 }
 
@@ -99,6 +118,21 @@ mod tests {
         assert_eq!(panel.text(), "broker falló");
         panel.start();
         assert!(panel.failure.is_none());
+    }
+    #[test]
+    fn mirror_status_describes_capture_without_display_lifecycle() {
+        let mut panel = Panel {
+            mode: SessionMode::Mirror,
+            ..Panel::default()
+        };
+        panel.start();
+        assert!(panel.text().contains("red"));
+        panel.update(State::Activating);
+        assert!(panel.text().contains("captura"));
+        panel.stop();
+        assert!(!panel.text().contains("ventanas"));
+        panel.finish(Err("captura interrumpida".into()));
+        assert_eq!(panel.text(), "captura interrumpida");
     }
     #[test]
     fn only_explicit_host_events_change_connection_state() {

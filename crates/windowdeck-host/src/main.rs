@@ -125,11 +125,19 @@ enum Mode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CaptureTarget {
+    PrimaryMonitor,
     Monitor(usize),
     WindowDeck,
     WindowDeckAuto,
     WindowDeckCpu,
     WindowDeckNative,
+}
+
+fn legacy_capture_target(target: Option<CaptureTarget>) -> Option<CaptureTarget> {
+    match target {
+        Some(CaptureTarget::WindowDeckNative) => Some(CaptureTarget::WindowDeckCpu),
+        other => other,
+    }
 }
 
 #[cfg(windows)]
@@ -308,7 +316,7 @@ fn serve(
         {
             if codec == VideoCodec::H264Frames && codecs & codec.capability() == 0 {
                 codec = VideoCodec::H264;
-                monitor = Some(CaptureTarget::WindowDeckCpu);
+                monitor = legacy_capture_target(monitor);
                 emit(
                     Level::Info,
                     "native_host_fallback",
@@ -481,6 +489,13 @@ fn capture_stream(
     codec: VideoCodec,
 ) -> Result<(), AnyError> {
     let index = match target {
+        CaptureTarget::PrimaryMonitor => {
+            return capture::stream_primary_h264(
+                stream,
+                session_id,
+                codec == VideoCodec::H264Frames,
+            );
+        }
         CaptureTarget::WindowDeckNative => return capture::stream_native_h264(stream, session_id),
         CaptureTarget::WindowDeckCpu
             if matches!(codec, VideoCodec::H264 | VideoCodec::H264Frames) =>
@@ -538,7 +553,8 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
         CaptureTarget::WindowDeck => {
             capture::virtual_monitor()?;
         }
-        CaptureTarget::WindowDeckAuto
+        CaptureTarget::PrimaryMonitor
+        | CaptureTarget::WindowDeckAuto
         | CaptureTarget::WindowDeckCpu
         | CaptureTarget::WindowDeckNative => {}
     }
@@ -649,6 +665,7 @@ mod tests {
     #[test]
     fn failed_validation_never_reaches_any_automatic_display_route() {
         for target in [
+            CaptureTarget::PrimaryMonitor,
             CaptureTarget::WindowDeckAuto,
             CaptureTarget::WindowDeckCpu,
             CaptureTarget::WindowDeckNative,
@@ -723,6 +740,11 @@ mod tests {
     #[test]
     fn automatic_display_requires_compatible_negotiation() {
         for (target, codecs) in [
+            (CaptureTarget::PrimaryMonitor, 0),
+            (
+                CaptureTarget::PrimaryMonitor,
+                VideoCodec::Rgb332.capability(),
+            ),
             (CaptureTarget::WindowDeckAuto, 0),
             (
                 CaptureTarget::WindowDeckAuto,

@@ -1,5 +1,53 @@
 # Pruebas y mediciones
 
+## Preparación de 0.3.0 — 28 de septiembre de 2026
+
+Recompilado el workspace con versión 0.3.0; `Cargo.lock` solo cambia las seis
+versiones internas. Formato, Clippy base/nativo y 59 pruebas Rust en cada
+configuración correctos. La compilación release con `scripts/build-media.ps1`
+supera la autoprueba multimedia: 18 frames, tres reinicios del decoder y
+contenido verificado.
+
+El arnés existente `scripts/test-launcher.ps1` supera apertura, controles
+accesibles, rechazo de segunda instancia y cierre normal del panel release.
+La captura se revisó visualmente: ambos modos y sus textos son legibles a
+96 DPI. Evidencia local: `target/release-v0.3.0/panel/`. Esta prueba no inicia
+host/broker ni sustituye la aceptación del usuario de la transmisión.
+
+## Duplicación de pantalla principal — 28 de septiembre de 2026
+
+Tras su prueba, el usuario confirma «funciona genial» y pide preparar la
+release 0.3.0. Se registra aceptación del funcionamiento; no se dispone de
+una medición comparativa de carga/latencia.
+
+Implementada la opción del host/panel descrita en
+[ADR 0021](adr/0021-primary-screen-mirroring.md). El cliente no cambia.
+
+- Formato y Clippy base/nativo correctos. Workspace: 59 pruebas superadas en
+  configuración base y nativa, con las tres exclusiones habituales. Ejecutada
+  aparte y superada la regresión FFmpeg
+  `cpu_encoder_output_decodes_after_fragmented_transport`.
+- Compilados host y lanzador release con `--all-features`. La versión del host
+  confirma perfil release, `native_media=true` y FFmpeg 9.0.1; la ayuda del panel
+  incluye `--mirror`. No se ha publicado una release ni actualizado la Deck.
+- `scripts/test-mirror-host.py --host target/debug/windowdeck-host.exe` superó
+  tres sesiones consecutivas sobre loopback con captura real de la principal.
+  FFprobe decodificó 703 frames H.264 integrados, 106 MPEG-TS y 109 integrados
+  tras reconectar, todos de 1280 × 800. El último ensayo solicitó Detener con
+  la conexión abierta y verificó la salida normal del host.
+- La prueba fuerza una ruta inexistente de `windowdeck-display.exe`; no requiere
+  el auxiliar ni arranca brokers del driver. Los registros confirman selección
+  de duplicación en las tres sesiones, sin captura del driver ni de su monitor.
+  Después no quedan procesos WindowDeck y `--verify` informa de ausencia de
+  pantalla WindowDeck activa. El vídeo de la prueba no se guarda en disco.
+
+Estos recuentos comprueban decodificación, no imágenes nuevas por segundo ni
+latencia física. Quedan pendientes la comparación de carga/latencia en la Deck,
+sesión prolongada, cambios de monitor, HDR y bloqueo/reanudación. La revisión
+visual y el ciclo Iniciar/UAC/Detener del panel con duplicación también están
+pendientes: la herramienta de control nativo no pudo conectarse a su pipe en
+esta sesión. El arnés de panel se ha actualizado para exigir los dos selectores.
+
 ## Validación de conexión — 13 de septiembre de 2026
 
 Después de probar 0.2.1, el usuario informa de altas/bajas repetidas del monitor.

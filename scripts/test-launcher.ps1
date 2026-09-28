@@ -89,7 +89,7 @@ try {
     $names = @($controls | ForEach-Object { $_.name })
     $controls | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'controls.json') -Encoding UTF8
     [WindowDeckPanelProbe]::Capture($window, (Join-Path $EvidenceDirectory 'panel.png'))
-    foreach ($name in @('Iniciar', 'Detener', 'Ver registros')) {
+    foreach ($name in @('Iniciar', 'Detener', 'Ver registros', 'Extender escritorio', 'Duplicar pantalla principal')) {
         if ($names -notcontains $name) { throw "Falta el control accesible $name." }
     }
     $metrics = [ordered]@{

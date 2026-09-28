@@ -4,6 +4,8 @@ use std::process::Command;
 fn help_and_invalid_arguments_exit_without_starting_the_host() {
     for (args, success, expected) in [
         (vec!["--help"], true, "Uso recomendado"),
+        (vec!["--help"], true, "--mirror"),
+        (vec!["--mirror", "--driver-h264"], false, "direccion"),
         (vec!["diag"], true, "Diagnosticos"),
         (vec!["diag", "--help"], true, "gpu-encode"),
         (vec!["--version"], true, "windowdeck-host"),

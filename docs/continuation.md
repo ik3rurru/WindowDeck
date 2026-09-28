@@ -1,4 +1,37 @@
-# Punto de continuación — 13 de septiembre de 2026
+# Punto de continuación — 28 de septiembre de 2026
+
+## Duplicar pantalla principal sin driver
+
+El usuario confirma «funciona genial» y solicita preparar una release. Se
+prepara **0.3.0** con notas, metadatos de Flatpak y documentación de los paquetes
+actualizados. Esta confirmación acepta el funcionamiento probado por el usuario;
+no sustituye una medición comparativa de carga o latencia.
+
+A petición del usuario se añade una opción adicional al panel: **Duplicar
+pantalla principal**, conservando **Extender escritorio** por defecto. El host
+acepta `--mirror`, captura la principal mediante WGC, escala en GPU a 1280 × 800
+y conserva el protocolo/cliente. No activa ni requiere el driver; el gestor
+elevado solo prepara el firewall en este modo.
+
+El workspace 0.3.0 está compilado en `target/release` con `--all-features`.
+La etiqueta de release prevista es `v0.3.0`, con notas en
+`docs/releases/v0.3.0.md`. No se ha cambiado la Deck ni el driver.
+Pasan 59 pruebas base/nativas, formato, Clippy y regresión FFmpeg.
+La prueba real por loopback superó vídeo integrado, MPEG-TS, reconexión y Stop,
+sin auxiliar de pantalla. Detalles y límites en [testing.md](testing.md) y
+[ADR 0021](adr/0021-primary-screen-mirroring.md).
+
+Durante la preparación de la release se ejecuta el arnés existente del panel:
+apertura, controles accesibles, segunda instancia y cierre correctos. Captura
+revisada a 96 DPI; evidencia `target/release-v0.3.0/panel/`. También pasa la
+autoprueba multimedia release (18 frames y tres reinicios del decoder).
+
+Pendientes: automatizar el ciclo UAC en duplicación, comparación real de
+carga/latencia, otras escalas y sesiones prolongadas. No dar por demostrada
+una mejora de rendimiento. No quedan sesiones WindowDeck activas tras la
+prueba local.
+
+## Punto anterior — 13 de septiembre de 2026
 
 ## Conexión inestable tras las pruebas de 0.2.1
 

@@ -3,7 +3,7 @@ use super::{
     process::{OwnedProcess, POLL, STOP_GRACE},
     system_program,
 };
-use crate::cli::BrokerOptions;
+use crate::cli::{BrokerOptions, SessionMode};
 use std::{
     ffi::OsString,
     fs,
@@ -35,7 +35,7 @@ impl Connection {
     pub fn start(
         layout: &Layout,
         session: &Path,
-        native: bool,
+        mode: SessionMode,
         cancel: &Arc<AtomicBool>,
     ) -> io::Result<Option<Self>> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
@@ -46,7 +46,7 @@ impl Connection {
             listener.local_addr()?.to_string().into(),
             token.clone().into(),
             session.as_os_str().to_owned(),
-            OsString::from(if native { "gpu" } else { "cpu" }),
+            OsString::from(mode.broker_arg()),
         ];
         let executable = layout.launcher.clone();
         let (sender, finished) = mpsc::channel();
@@ -184,15 +184,8 @@ fn manage(options: &BrokerOptions, stream: &mut TcpStream) -> io::Result<()> {
         return Ok(());
     }
     let mut brokers = Vec::new();
-    let routes: &[(&str, &str)] = if options.native {
-        &[
-            ("--gpu-frame-broker", "broker"),
-            ("--frame-broker", "cpu-broker"),
-        ]
-    } else {
-        &[("--frame-broker", "broker")]
-    };
-    for (route, log) in routes {
+    // Mirroring only prepares LAN access. It never opens the display helper.
+    for (route, log) in options.mode.display_brokers() {
         let mut command = layout.command(&layout.display)?;
         command.arg(route);
         brokers.push(OwnedProcess::spawn(

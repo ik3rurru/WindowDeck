@@ -1,4 +1,5 @@
 use crate::{
+    cli::SessionMode,
     model::{Panel, State},
     platform::{self, Event, Worker},
 };
@@ -15,6 +16,9 @@ use std::{
 struct Ui {
     window: nwg::Window,
     status: nwg::Label,
+    extend: nwg::RadioButton,
+    mirror: nwg::RadioButton,
+    mode_hint: nwg::Label,
     start: nwg::Button,
     stop: nwg::Button,
     logs: nwg::Button,
@@ -36,6 +40,15 @@ impl Ui {
         self.stop
             .set_enabled(model.state != State::Stopped && model.state != State::Stopping);
         self.logs.set_enabled(self.session.borrow().is_some());
+        let editable = model.state == State::Stopped && !self.closing.get();
+        self.extend.set_enabled(editable);
+        self.mirror.set_enabled(editable);
+        self.mode_hint
+            .set_text(if model.mode == SessionMode::Mirror {
+                "Muestra la pantalla principal del PC en la Deck. No necesita el driver virtual."
+            } else {
+                "Añade una pantalla para mover ventanas a la Deck. Requiere el driver virtual."
+            });
     }
 
     fn stop(&self) {
@@ -88,7 +101,7 @@ impl Ui {
     }
 }
 
-pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
+pub fn run(mode: SessionMode, smoke: Option<PathBuf>) -> io::Result<()> {
     let started = Instant::now();
     let instance = single_instance::SingleInstance::new("Local\\WindowDeck.Launcher")
         .map_err(|e| platform::error(e.to_string()))?;
@@ -98,6 +111,7 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
     nwg::init().map_err(nwg_error)?;
     nwg::Font::set_global_family("Segoe UI").map_err(nwg_error)?;
     let mut ui = Ui::default();
+    ui.model.get_mut().mode = mode;
     let mut resources = nwg::EmbedResource::default();
     nwg::EmbedResource::builder()
         .build(&mut resources)
@@ -108,9 +122,9 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
         .build(&mut ui.icon)
         .map_err(nwg_error)?;
     nwg::Window::builder()
-        .size((520, 240))
+        .size((520, 350))
         .center(true)
-        .title(if native {
+        .title(if mode == SessionMode::Native {
             "WindowDeck — GPU experimental"
         } else {
             "WindowDeck"
@@ -121,10 +135,50 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
         .map_err(nwg_error)?;
     nwg::Label::builder()
         .text(State::Stopped.text())
-        .position((20, 20))
+        .position((20, 135))
         .size((480, 65))
         .parent(&ui.window)
         .build(&mut ui.status)
+        .map_err(nwg_error)?;
+    for (radio, text, y, checked, group) in [
+        (
+            &mut ui.extend,
+            "&Extender escritorio",
+            16,
+            mode != SessionMode::Mirror,
+            true,
+        ),
+        (
+            &mut ui.mirror,
+            "&Duplicar pantalla principal",
+            47,
+            mode == SessionMode::Mirror,
+            false,
+        ),
+    ] {
+        let mut flags = nwg::RadioButtonFlags::VISIBLE | nwg::RadioButtonFlags::TAB_STOP;
+        if group {
+            flags |= nwg::RadioButtonFlags::GROUP;
+        }
+        nwg::RadioButton::builder()
+            .text(text)
+            .flags(flags)
+            .position((20, y))
+            .size((480, 28))
+            .check_state(if checked {
+                nwg::RadioButtonState::Checked
+            } else {
+                nwg::RadioButtonState::Unchecked
+            })
+            .parent(&ui.window)
+            .build(radio)
+            .map_err(nwg_error)?;
+    }
+    nwg::Label::builder()
+        .position((20, 84))
+        .size((480, 45))
+        .parent(&ui.window)
+        .build(&mut ui.mode_hint)
         .map_err(nwg_error)?;
     for (button, text, x, width) in [
         (&mut ui.start, "&Iniciar", 20, 145),
@@ -133,7 +187,7 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
     ] {
         nwg::Button::builder()
             .text(text)
-            .position((x, 100))
+            .position((x, 215))
             .size((width, 40))
             .parent(&ui.window)
             .build(button)
@@ -141,7 +195,7 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
     }
     nwg::Label::builder()
         .text("Buscando la dirección del PC...")
-        .position((20, 165))
+        .position((20, 280))
         .size((480, 65))
         .parent(&ui.window)
         .build(&mut ui.address)
@@ -178,10 +232,22 @@ pub fn run(native: bool, smoke: Option<PathBuf>) -> io::Result<()> {
             return;
         };
         match event {
+            nwg::Event::OnButtonClick if handle == ui.extend || handle == ui.mirror => {
+                if ui.model.borrow().state == State::Stopped && !ui.closing.get() {
+                    ui.model.borrow_mut().mode = if handle == ui.mirror {
+                        SessionMode::Mirror
+                    } else if mode == SessionMode::Native {
+                        SessionMode::Native
+                    } else {
+                        SessionMode::Extend
+                    };
+                    ui.refresh();
+                }
+            }
             nwg::Event::OnButtonClick if handle == ui.start => {
                 if ui.worker.borrow().is_none() && !ui.closing.get() {
                     ui.model.borrow_mut().start();
-                    *ui.worker.borrow_mut() = Some(platform::start(native));
+                    *ui.worker.borrow_mut() = Some(platform::start(ui.model.borrow().mode));
                     ui.refresh();
                 }
             }

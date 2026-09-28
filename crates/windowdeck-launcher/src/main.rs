@@ -29,9 +29,9 @@ fn main() -> ExitCode {
             }
         }
         #[cfg(windows)]
-        cli::Mode::Panel { native, smoke } => {
+        cli::Mode::Panel { mode, smoke } => {
             let interactive = smoke.is_none();
-            if let Err(error) = ui::run(native, smoke) {
+            if let Err(error) = ui::run(mode, smoke) {
                 if interactive {
                     native_windows_gui::error_message("WindowDeck", &error.to_string());
                 } else {
