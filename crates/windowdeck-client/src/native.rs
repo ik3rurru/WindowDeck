@@ -5,17 +5,31 @@ use windowdeck_protocol::video::{AccessUnit, Assembler};
 
 enum Event {
     Packet(u64, AccessUnit),
-    Connected(u64, TcpStream),
+    Connected(u64, TcpStream, u16, u16),
     Lost,
     Stopped,
     Failed(String),
 }
 
-pub(super) fn run(target: Target, fullscreen: bool) -> Result<(), Box<dyn Error>> {
+pub(super) fn run(
+    mut target: Target,
+    fullscreen: bool,
+    quality: Quality,
+) -> Result<(), Box<dyn Error>> {
     // Initialize SDL, the renderer and decoder before acknowledging any host probe.
     // A local startup failure must not cause a virtual display to appear on the PC.
     let mut player = windowdeck_media::Player::new(fullscreen)?;
-    let (stream, id, _, _, codec) = connect(&target, VideoCodec::H264Frames)?;
+    target.video_bounds = quality.bounds(player.output_size()?);
+    emit(
+        Level::Info,
+        "native_quality",
+        &[
+            ("profile", &format!("{quality:?}")),
+            ("max_width", &target.video_bounds.0.to_string()),
+            ("max_height", &target.video_bounds.1.to_string()),
+        ],
+    );
+    let (stream, id, width, height, codec) = connect(&target, VideoCodec::H264Frames)?;
     if codec == VideoCodec::H264 {
         drop(player);
         emit(
@@ -25,6 +39,7 @@ pub(super) fn run(target: Target, fullscreen: bool) -> Result<(), Box<dyn Error>
         );
         return play_legacy(stream, id, &target, fullscreen, false);
     }
+    player.configure(width, height)?;
     let shutdown = Arc::new(Mutex::new(stream.try_clone()?));
     // Keep recovery tied to the session whose queued packets are being decoded.
     // The shared shutdown socket may already belong to a newer handshake.
@@ -101,7 +116,9 @@ pub(super) fn run(target: Target, fullscreen: bool) -> Result<(), Box<dyn Error>
                                 session = None;
                             }
                         }
-                        Event::Connected(id, socket) => {
+                        Event::Connected(id, socket, width, height) => {
+                            player.configure(width, height)?;
+                            session = None;
                             receiving_session = id;
                             session_socket = socket;
                             discarded_session = None;
@@ -206,7 +223,7 @@ fn receive(
                 thread::sleep(Duration::from_millis(20));
             }
             match connect_observed(target, VideoCodec::H264Frames, Some((stopping, shutdown))) {
-                Ok((next, id, _, _, VideoCodec::H264Frames)) => {
+                Ok((next, id, width, height, VideoCodec::H264Frames)) => {
                     let mut watched = shutdown
                         .lock()
                         .map_err(|_| io::Error::other("socket lock poisoned"))?;
@@ -219,7 +236,7 @@ fn receive(
                     session = id;
                     queue::send_with_timeout(
                         output,
-                        Event::Connected(id, stream.try_clone()?),
+                        Event::Connected(id, stream.try_clone()?, width, height),
                         queue::STALL_TIMEOUT,
                     )?;
                     emit(

@@ -23,6 +23,8 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 mod host_picker;
+mod quality;
+use quality::Quality;
 #[cfg(feature = "native-media")]
 mod native;
 const DEFAULT_ADDRESS: &str = "auto";
@@ -41,6 +43,12 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
+    if matches!(env::args().nth(1).as_deref(), Some("--help" | "-h")) {
+        println!(
+            "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--native] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana."
+        );
+        return Ok(());
+    }
     #[cfg(feature = "native-media")]
     if env::args().nth(1).as_deref() == Some("--media-self-test") {
         windowdeck_media::self_test()?;
@@ -71,6 +79,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     if native && !cfg!(feature = "native-media") {
         return Err("recompila con --features native-media para usar --native".into());
     }
+    if options.quality != Quality::Auto && !native {
+        return Err("--quality requiere el reproductor --native".into());
+    }
     let mut target = Target::from(options.address.as_str());
     if options.address == "auto" {
         let codec = if options.h264_test { "h264" } else { "rgb332" };
@@ -84,7 +95,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     if options.h264_test {
         #[cfg(feature = "native-media")]
         if native {
-            return native::run(target, options.fullscreen);
+            return native::run(target, options.fullscreen, options.quality);
         }
         return receive_h264_test(&target, options.fullscreen, options.ffplay_baseline);
     }
@@ -125,6 +136,7 @@ struct Options {
     fullscreen: bool,
     h264_test: bool,
     ffplay_baseline: bool,
+    quality: Quality,
 }
 
 fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'static str> {
@@ -132,12 +144,17 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     let mut fullscreen = false;
     let mut h264_test = false;
     let mut ffplay_baseline = false;
-    for argument in args {
+    let mut quality = Quality::Auto;
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
         match argument.as_str() {
             "--fullscreen" => fullscreen = true,
             "--h264-test" => h264_test = true,
             "--native" | "--ffplay" => h264_test = true,
             "--ffplay-baseline" => ffplay_baseline = true,
+            "--quality" => {
+                quality = Quality::parse(&args.next().ok_or("falta el perfil de --quality")?)?
+            }
             _ if argument.starts_with('-') => return Err("opción desconocida"),
             _ if address.is_none() => address = Some(argument),
             _ => return Err("solo se admite una dirección"),
@@ -154,6 +171,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
         fullscreen,
         h264_test,
         ffplay_baseline,
+        quality,
     })
 }
 
@@ -161,6 +179,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
 struct Target {
     address: String,
     browser: Option<Arc<Mutex<windowdeck_protocol::discovery::Browser>>>,
+    video_bounds: (u16, u16),
 }
 
 impl From<&str> for Target {
@@ -168,6 +187,7 @@ impl From<&str> for Target {
         Self {
             address: address.into(),
             browser: None,
+            video_bounds: windowdeck_protocol::quality::DECK,
         }
     }
 }
@@ -245,12 +265,12 @@ fn connect_observed(
             max_width: if codec == VideoCodec::H264 {
                 u16::MAX
             } else {
-                1280
+                target.video_bounds.0
             },
             max_height: if codec == VideoCodec::H264 {
                 u16::MAX
             } else {
-                800
+                target.video_bounds.1
             },
             max_fps: 60,
             codecs: codec.capability()
@@ -275,7 +295,11 @@ fn connect_observed(
             && fps <= 60
             && (configured_codec == codec
                 || (codec == VideoCodec::H264Frames && configured_codec == VideoCodec::H264))
-            && (configured_codec != VideoCodec::H264Frames || (width <= 1280 && height <= 800)) =>
+            && (configured_codec != VideoCodec::H264Frames
+                || (width <= target.video_bounds.0
+                    && height <= target.video_bounds.1
+                    && width.is_multiple_of(2)
+                    && height.is_multiple_of(2))) =>
         {
             emit(
                 Level::Info,
@@ -1254,6 +1278,7 @@ mod tests {
                 fullscreen: true,
                 h264_test: false,
                 ffplay_baseline: false,
+                quality: Quality::Auto,
             })
         );
         assert_eq!(
@@ -1263,6 +1288,7 @@ mod tests {
                 fullscreen: false,
                 h264_test: true,
                 ffplay_baseline: false,
+                quality: Quality::Auto,
             })
         );
         assert_eq!(
@@ -1272,6 +1298,7 @@ mod tests {
                 fullscreen: false,
                 h264_test: true,
                 ffplay_baseline: false,
+                quality: Quality::Auto,
             })
         );
         assert_eq!(
@@ -1281,6 +1308,7 @@ mod tests {
                 fullscreen: true,
                 h264_test: true,
                 ffplay_baseline: false,
+                quality: Quality::Auto,
             })
         );
         assert!(parse_options(["--unknown".into()]).is_err());
@@ -1292,6 +1320,66 @@ mod tests {
         ])
         .expect("valid H.264 comparison");
         assert!(baseline.ffplay_baseline && baseline.h264_test && baseline.fullscreen);
+    }
+
+    #[test]
+    fn quality_options_are_validated() {
+        let options =
+            parse_options(["--native", "--quality", "1440p", "--fullscreen"].map(String::from))
+                .unwrap();
+        assert_eq!(options.quality, Quality::Qhd);
+        for args in [vec!["--quality"], vec!["--quality", "4k"]] {
+            assert!(parse_options(args.into_iter().map(String::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn native_handshake_rejects_modes_outside_the_advertised_bounds() {
+        for (width, height) in [(1920, 1080), (1281, 800), (0, 800)] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let server = thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                read_message(&mut socket).unwrap();
+                write_message(
+                    &mut socket,
+                    &Message::Hello {
+                        app_version: "test".into(),
+                    },
+                )
+                .unwrap();
+                assert!(matches!(
+                    read_message(&mut socket).unwrap(),
+                    Message::Capabilities {
+                        max_width: 1280,
+                        max_height: 800,
+                        ..
+                    }
+                ));
+                write_message(
+                    &mut socket,
+                    &Message::SessionConfig {
+                        session_id: 1,
+                        width,
+                        height,
+                        fps: 60,
+                        codec: VideoCodec::H264Frames,
+                    },
+                )
+                .unwrap();
+            });
+            let result = connect(&Target::from(address.as_str()), VideoCodec::H264Frames);
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("configuración de sesión")
+            );
+            server.join().unwrap();
+        }
     }
 
     #[test]

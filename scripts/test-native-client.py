@@ -37,13 +37,14 @@ def read(sock, kind):
     return payload[3:]
 
 
-def handshake(sock, session, legacy=False):
+def handshake(sock, session, size, legacy=False):
     sock.settimeout(10)
     read(sock, 1)
     sock.sendall(message(1, struct.pack(">H", 4) + b"test"))
-    capabilities = read(sock, 2)[-1]
+    max_width, max_height, max_fps, capabilities = struct.unpack(">HHHB", read(sock, 2))
+    assert size[0] <= max_width and size[1] <= max_height and max_fps == 60
     assert capabilities & 4, "native access-unit capability missing"
-    sock.sendall(message(3, struct.pack(">QHHHB", session, 1280, 800, 60, 3)))
+    sock.sendall(message(3, struct.pack(">QHHHB", session, *size, 60, 3)))
     if not legacy:
         assert capabilities & 128, "connection validation capability missing"
         for round in range(8):
@@ -58,9 +59,10 @@ def handshake(sock, session, legacy=False):
 
 
 def send_frame(sock, session, number, payload, partial=False):
-    split = len(payload) // 2
-    for index, fragment in enumerate((payload[:split], payload[split:])):
-        body = struct.pack(">QQQHHB", session, number, 100000 + number * 16667, index, 2, 1)
+    step = min(60000, (len(payload) + 1) // 2)
+    fragments = [payload[offset:offset + step] for offset in range(0, len(payload), step)]
+    for index, fragment in enumerate(fragments):
+        body = struct.pack(">QQQHHB", session, number, 100000 + number * 16667, index, len(fragments), 1)
         sock.sendall(message(10, body + fragment))
         if partial:
             return
@@ -71,6 +73,7 @@ def main():
     parser.add_argument("--client", required=True)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--legacy-handshake", action="store_true")
+    parser.add_argument("--high-resolution", action="store_true")
     args = parser.parse_args()
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     # A renderer startup failure must happen before the host can activate a display.
@@ -90,15 +93,18 @@ def main():
         else:
             unexpected.close()
             raise AssertionError("client connected before its player was ready")
-    encoded = subprocess.check_output([
-        args.ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x800:rate=60",
-        "-frames:v", "12", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-g", "1", "-x264-params", "aud=1:repeat-headers=1", "-f", "h264", "pipe:1",
-    ], **hidden)
-    boundaries = [m.start() for m in re.finditer(b"\x00\x00(?:\x00)?\x01", encoded)
-                  if encoded[m.end()] & 31 == 9]
-    assert len(boundaries) == 12, "expected twelve complete H.264 access units"
-    frames = [encoded[a:b] for a, b in zip(boundaries, boundaries[1:] + [len(encoded)])]
+    sizes = ((1920, 1080), (2560, 1440)) if args.high_resolution else ((1280, 800), (1280, 720))
+    videos = []
+    for width, height in sizes:
+        encoded = subprocess.check_output([
+            args.ffmpeg, "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate=60",
+            "-frames:v", "12", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-g", "1", "-x264-params", "aud=1:repeat-headers=1", "-f", "h264", "pipe:1",
+        ], **hidden)
+        boundaries = [m.start() for m in re.finditer(b"\x00\x00(?:\x00)?\x01", encoded)
+                      if encoded[m.end()] & 31 == 9]
+        assert len(boundaries) == 12, "expected twelve complete H.264 access units"
+        videos.append([encoded[a:b] for a, b in zip(boundaries, boundaries[1:] + [len(encoded)])])
     failures = []
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -107,10 +113,10 @@ def main():
 
         def serve():
             try:
-                for session in (10, 20):
+                for session, size, frames in zip((10, 20), sizes, videos):
                     sock, _ = listener.accept()
                     with sock:
-                        handshake(sock, session, args.legacy_handshake)
+                        handshake(sock, session, size, args.legacy_handshake)
                         for number, frame in enumerate(frames):
                             send_frame(sock, session, number, frame)
                             time.sleep(1 / 60)
@@ -125,7 +131,8 @@ def main():
         server = threading.Thread(target=serve, daemon=True)
         server.start()
         env = dict(os.environ, SDL_VIDEODRIVER="dummy")
-        result = subprocess.run([args.client, f"127.0.0.1:{listener.getsockname()[1]}", "--native"],
+        quality = ["--quality", "1440p"] if args.high_resolution else []
+        result = subprocess.run([args.client, f"127.0.0.1:{listener.getsockname()[1]}", "--native", *quality],
                                 env=env, capture_output=True, text=True, timeout=25, **hidden)
         server.join(timeout=2)
     assert not failures, failures
@@ -134,10 +141,12 @@ def main():
     assert "native_reconnected" in result.stderr, result.stderr
     assert "native_decode_reset" not in result.stderr, result.stderr
     assert "native_decoder active=" in result.stderr, result.stderr
+    for width, height in sizes:
+        assert f"native_video size={width}x{height}" in result.stderr, result.stderr
     assert result.stderr.index("native_renderer name=") < result.stderr.index("event=host_connected"), result.stderr
     if not args.legacy_handshake:
         assert result.stderr.count("event=connection_validation_started") == 2, result.stderr
-    print("PASS: startup failure without connection, player readiness, validation/legacy handshake, native decoding, partial-frame disconnect, reconnect and Stop")
+    print(f"PASS: {sizes}: startup failure without connection, player readiness, validation/legacy handshake, native decoding, partial-frame disconnect, reconnect at a new resolution and Stop")
 
 
 if __name__ == "__main__":

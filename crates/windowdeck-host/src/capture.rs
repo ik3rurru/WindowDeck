@@ -209,7 +209,7 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
         index.to_string(),
         None,
         None,
-        false,
+        StreamVideo::fixed(false),
     )
 }
 
@@ -217,45 +217,99 @@ pub fn stream_primary_h264(
     stream: TcpStream,
     session_id: u64,
     framed: bool,
+    size: (u16, u16),
 ) -> Result<(), AnyError> {
     let monitor = Monitor::primary()?;
+    let source_size = (monitor.width()?, monitor.height()?);
+    if windowdeck_protocol::quality::fit(source_size, size)? != size {
+        return Err("la resolución principal cambió durante la negociación".into());
+    }
     let device = monitor.device_name()?;
     let handle = monitor.as_raw_hmonitor() as usize;
     // Select the actual HMONITOR, not a DXGI output index on an assumed adapter.
     // Scale on the GPU before downloading, bounding CPU work even on a 4K desktop.
     let input = format!(
-        "gfxcapture=hmonitor={handle}:max_framerate={ENCODE_FPS}:capture_cursor=1:output_fmt=bgra:width={}:height={}:resize_mode=scale_aspect",
-        super::H264_WIDTH,
-        super::H264_HEIGHT,
+        "gfxcapture=hmonitor={handle}:max_framerate={ENCODE_FPS}:capture_cursor=1:output_fmt=bgra:width={}:height={}:resize_mode=scale_aspect:scale_mode=bicubic",
+        size.0, size.1,
     );
     emit(
         Level::Info,
         "mirror_capture_selected",
-        &[("device", &device), ("capture", "windows_graphics_capture")],
+        &[
+            ("device", &device),
+            ("capture", "windows_graphics_capture"),
+            (
+                "source_size",
+                &format!("{}x{}", source_size.0, source_size.1),
+            ),
+            ("video_size", &format!("{}x{}", size.0, size.1)),
+            ("scale_filter", "bicubic"),
+        ],
     );
     stream_h264_input(
         stream,
         session_id,
         input,
         device.clone(),
-        Some(WatchedMonitor::Primary { device, handle }),
+        Some(WatchedMonitor::Primary {
+            device,
+            handle,
+            source_size,
+        }),
         None,
-        framed,
+        StreamVideo { framed, size },
     )
+}
+
+pub fn primary_mirror_size(bounds: (u16, u16)) -> Result<(u16, u16), AnyError> {
+    let monitor = Monitor::primary()?;
+    Ok(windowdeck_protocol::quality::fit(
+        (monitor.width()?, monitor.height()?),
+        bounds,
+    )?)
+}
+
+fn mirror_bitrate(size: (u16, u16), override_mbps: Option<&str>) -> Result<u32, &'static str> {
+    if let Some(value) = override_mbps {
+        return value
+            .parse::<u32>()
+            .ok()
+            .filter(|v| (4..=100).contains(v))
+            .map(|v| v * 1_000_000)
+            .ok_or("WINDOWDECK_MIRROR_BITRATE_MBPS debe ser un entero entre 4 y 100");
+    }
+    let pixels = u32::from(size.0) * u32::from(size.1);
+    Ok(if pixels <= 1280 * 800 {
+        ENCODE_BITRATE
+    } else if pixels <= 1920 * 1080 {
+        28_000_000
+    } else {
+        40_000_000
+    })
 }
 
 enum WatchedMonitor {
     Virtual(String),
-    Primary { device: String, handle: usize },
+    Primary {
+        device: String,
+        handle: usize,
+        source_size: (u32, u32),
+    },
 }
 
 impl WatchedMonitor {
     fn active(&self) -> bool {
         match self {
             Self::Virtual(expected) => virtual_device_name().is_ok_and(|name| name == *expected),
-            Self::Primary { device, handle } => Monitor::primary().is_ok_and(|monitor| {
+            Self::Primary {
+                device,
+                handle,
+                source_size,
+            } => Monitor::primary().is_ok_and(|monitor| {
                 monitor.as_raw_hmonitor() as usize == *handle
                     && monitor.device_name().is_ok_and(|name| name == *device)
+                    && monitor.width().is_ok_and(|width| width == source_size.0)
+                    && monitor.height().is_ok_and(|height| height == source_size.1)
             }),
         }
     }
@@ -442,7 +496,7 @@ pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), Any
         name.clone(),
         Some(WatchedMonitor::Virtual(name)),
         None,
-        false,
+        StreamVideo::fixed(false),
     )
 }
 
@@ -499,7 +553,7 @@ pub fn stream_driver_h264(
         name.clone(),
         Some(WatchedMonitor::Virtual(name)),
         Some(input),
-        framed,
+        StreamVideo::fixed(framed),
     )
 }
 
@@ -616,6 +670,20 @@ impl Read for EncoderOutput {
     }
 }
 
+struct StreamVideo {
+    framed: bool,
+    size: (u16, u16),
+}
+
+impl StreamVideo {
+    fn fixed(framed: bool) -> Self {
+        Self {
+            framed,
+            size: (super::H264_WIDTH, super::H264_HEIGHT),
+        }
+    }
+}
+
 fn stream_h264_input(
     stream: TcpStream,
     session_id: u64,
@@ -623,8 +691,12 @@ fn stream_h264_input(
     monitor: String,
     watched_monitor: Option<WatchedMonitor>,
     raw_input: Option<std::process::ChildStdout>,
-    framed: bool,
+    video: StreamVideo,
 ) -> Result<(), AnyError> {
+    let StreamVideo {
+        framed,
+        size: (video_width, video_height),
+    } = video;
     let encoder_name =
         std::env::var("WINDOWDECK_H264_ENCODER").unwrap_or_else(|_| "libx264".into());
     let encoder_name = match encoder_name.as_str() {
@@ -647,6 +719,16 @@ fn stream_h264_input(
         super::H264_HEIGHT,
     );
     let mirror = matches!(watched_monitor, Some(WatchedMonitor::Primary { .. }));
+    let bitrate = if mirror {
+        mirror_bitrate(
+            (video_width, video_height),
+            std::env::var("WINDOWDECK_MIRROR_BITRATE_MBPS")
+                .ok()
+                .as_deref(),
+        )?
+    } else {
+        ENCODE_BITRATE
+    };
     let filter = if mirror {
         // gfxcapture has already scaled and letterboxed the frame on the GPU.
         "hwdownload,format=bgra".to_owned()
@@ -726,7 +808,7 @@ fn stream_h264_input(
         "-g",
         &ENCODE_FPS.to_string(),
         "-b:v",
-        &ENCODE_BITRATE.to_string(),
+        &bitrate.to_string(),
         "-pix_fmt",
         output_format,
     ]);
@@ -825,10 +907,11 @@ fn stream_h264_input(
         "h264_stream_started",
         &[
             ("monitor", &monitor),
-            ("width", &super::H264_WIDTH.to_string()),
-            ("height", &super::H264_HEIGHT.to_string()),
+            ("width", &video_width.to_string()),
+            ("height", &video_height.to_string()),
             ("fps", &ENCODE_FPS.to_string()),
             ("encoder", &encoder_name),
+            ("bitrate", &bitrate.to_string()),
             ("transport", if framed { "h264_frames" } else { "mpegts" }),
         ],
     );
@@ -841,7 +924,7 @@ fn stream_h264_input(
     stream.set_write_timeout(Some(max_age))?;
     let (queued, receiver) = windowdeck_protocol::queue::channel();
     let reader = thread::spawn(move || read_encoded_output(output, queued, max_age));
-    let input = EncodedQueue::new(receiver, max_age);
+    let input = EncodedQueue::new(receiver, max_age, super::stop_requested);
     let result = if framed {
         super::annex_b::send(input, stream, session_id, super::stop_requested)
             .map_err(AnyError::from)
@@ -907,18 +990,21 @@ struct EncodedQueue {
     pending: io::Cursor<Vec<u8>>,
     ended: bool,
     max_age: Duration,
+    stopping: fn() -> bool,
 }
 
 impl EncodedQueue {
     fn new(
         receiver: mpsc::Receiver<windowdeck_protocol::queue::Queued<Vec<u8>>>,
         max_age: Duration,
+        stopping: fn() -> bool,
     ) -> Self {
         Self {
             receiver,
             pending: io::Cursor::new(Vec::new()),
             ended: false,
             max_age,
+            stopping,
         }
     }
 }
@@ -942,6 +1028,15 @@ impl Read for EncodedQueue {
                 )
             })?;
         let item = item.into_fresh_within(self.max_age)?;
+        // This is a live encoder, not a finite file. Only an explicit stop may
+        // turn pipe EOF into Message::Stop. A capture/device change must close
+        // the connection so clients reconnect, and must discard its final AU.
+        if item.is_empty() && !(self.stopping)() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "live encoder stopped; reconnect to renegotiate capture",
+            ));
+        }
         self.ended = item.is_empty();
         self.pending = io::Cursor::new(item);
         self.pending.read(bytes)
@@ -1211,6 +1306,61 @@ mod tests {
     use windowdeck_protocol::read_message;
 
     #[test]
+    fn mirror_bitrate_tracks_pixels_and_checks_overrides() {
+        assert_eq!(mirror_bitrate((1280, 720), None), Ok(16_000_000));
+        assert_eq!(mirror_bitrate((1920, 1080), None), Ok(28_000_000));
+        assert_eq!(mirror_bitrate((2560, 1440), None), Ok(40_000_000));
+        assert_eq!(mirror_bitrate((2560, 1440), Some("32")), Ok(32_000_000));
+        for value in ["0", "3", "101", "-1", "abc", "9999999999"] {
+            assert!(mirror_bitrate((1280, 720), Some(value)).is_err());
+        }
+    }
+
+    #[test]
+    fn unexpected_encoder_eof_reconnects_both_clients_without_stop() {
+        // One complete access unit followed by a partial next one, as when
+        // the display watchdog kills FFmpeg during a resolution change.
+        let bytes = vec![
+            0, 0, 1, 9, 0xf0, 0, 0, 1, 0x67, 0x80, 0, 0, 1, 0x68, 0x80, 0, 0, 1, 0x65, 0x80, 0, 0,
+            1, 9, 0xf0, 0, 0, 1,
+        ];
+        for framed in [false, true] {
+            let (sender, receiver) = windowdeck_protocol::queue::channel();
+            for payload in [bytes.clone(), Vec::new()] {
+                windowdeck_protocol::queue::send_with_timeout(
+                    &sender,
+                    payload,
+                    LEGACY_STALL_TIMEOUT,
+                )
+                .unwrap();
+            }
+            let input = EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT, || false);
+            let mut wire = Vec::new();
+            let result = if framed {
+                super::super::annex_b::send(input, &mut wire, 42, || false).map_err(AnyError::from)
+            } else {
+                send_h264_stream(input, &mut wire, 42)
+            };
+            assert_eq!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<io::Error>()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::UnexpectedEof
+            );
+            let mut remaining = wire.as_slice();
+            assert!(!remaining.is_empty());
+            while !remaining.is_empty() {
+                assert!(matches!(
+                    read_message(&mut remaining).unwrap(),
+                    Message::VideoChunk { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn virtual_source_rejects_unexpected_helper_output() {
         assert_eq!(
             parse_device_name(b"\\\\.\\DISPLAY12\r\n").expect("GDI source"),
@@ -1276,7 +1426,7 @@ mod tests {
             paused: false,
         };
         let result = send_h264_stream(
-            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT),
+            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT, || true),
             &mut output,
             42,
         );
@@ -1313,7 +1463,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT)
+            EncodedQueue::new(receiver, LEGACY_STALL_TIMEOUT, || false)
                 .read(&mut [0; 8])
                 .unwrap_err()
                 .kind(),
@@ -1335,7 +1485,10 @@ mod tests {
                 })
                 .unwrap();
             let mut bytes = [0; 8];
-            let result = EncodedQueue::new(receiver, windowdeck_protocol::queue::STALL_TIMEOUT)
+            let result =
+                EncodedQueue::new(receiver, windowdeck_protocol::queue::STALL_TIMEOUT, || {
+                    false
+                })
                 .read(&mut bytes);
             if expired {
                 assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);

@@ -1,4 +1,64 @@
-# Punto de continuación — 28 de septiembre de 2026
+# Punto de continuación — 30 de septiembre de 2026
+
+## Release 0.3.1
+
+A petición del usuario se preparan commit y etiqueta `v0.3.1` con los perfiles
+de calidad y la aceptación en TV 4K. Versión, metadatos y notas actualizados.
+Formato, pruebas Rust del workspace con todas las funciones y Clippy correctos.
+El workflow de release generará Windows, Flatpak y paquete Steam Deck;
+comprobar su resultado antes de considerar completada la publicación.
+
+## Prueba en TV 4K aceptada
+
+El usuario confirma «la nitidez es excelente» y da la prueba totalmente por
+válida. Deck en modo escritorio, TV a 3840 × 2160/60 Hz; cliente automático
+negocia 2560 × 1440 y presenta a 4K con decodificación VAAPI. Se cierra la
+prueba a petición del usuario y se verifica que no quedan cliente, host ni
+encoder de WindowDeck activos. Evidencias en `target/tv4k-20260930/` y registro
+remoto `/home/deck/Downloads/windowdeck-tv4k-20260930.log`.
+Aceptación visual completada; no se ha medido latencia física ni carga comparativa.
+
+## Calidad de duplicación sin dependencias nuevas
+
+Implementada la primera fase de [calidad de imagen](upscaling-quality.md):
+perfiles de cliente auto/Deck/1080p/1440p, negociación proporcional hasta
+2560 × 1440, reducción bicúbica y objetivos de bitrate 16/28/40 Mbps según
+cantidad de píxeles. El cliente valida dimensiones por sesión y reconexión.
+Auto toma la salida al abrir; reabrir tras conectar HDMI para renegociar.
+Extensión y clientes antiguos conservan el modo habitual. No se ha añadido
+FSR ni nuevas dependencias. Consultar [testing.md](testing.md) para la evidencia
+y el estado de instalación.
+
+Cliente de esta fase compilado, probado e instalado en la Deck después de
+despertarla. Pasan las pruebas Linux, VAAPI y reconexión 1080p → 1440p. Commit
+Flatpak actual:
+`79ef91aed3cef7f32a78702afd902943827ba798efdc88ac064c900c8a99b21f`.
+Sigue indicando 0.3.0, compilación local. Acceso de Steam comprobado y un solo
+acceso WindowDeck en el escritorio. Paquete y registros en
+`/home/deck/Downloads/windowdeck-quality-20260929/`. Aceptación visual completada
+el 30 de septiembre; queda la medición de carga/latencia en la red real.
+
+## Instalación anterior del cliente en la Steam Deck
+
+Se abandona la transmisión de controles a petición del usuario. La duplicación
+conserva ahora la proporción de la pantalla: una fuente 16:9 negocia 1280 × 720
+dentro del límite 1280 × 800. El cliente usa escalado lineal y recupera la
+textura tras un reinicio del dispositivo SDL; el EOF inesperado del encoder
+permite reconectar en vez de cerrar el cliente con `Stop`.
+
+Host y cliente Windows recompilados y comprobados. El cliente Linux se ha
+compilado e instalado por SSH en `deck@192.168.1.18`, con pruebas Rust,
+autoprueba VAAPI y arnés nativo con ambos handshakes correctos. Sigue indicando
+0.3.0; es una compilación local actualizada, sin nueva release publicada.
+Commit Flatpak instalado:
+`26d974c1ccc346d5c1e977d60f6ebb65d2f4d3d78f5868642116236b063efaea`.
+
+El acceso existente de Steam usa este Flatpak. Los accesos del escritorio
+están actualizados y el antiguo acceso de control ya no envía `--input`.
+Detalles, hashes y evidencias en [testing.md](testing.md). Queda pendiente
+la prueba visual de escalado en la Deck y televisor HDMI/4K.
+
+## Punto anterior — 28 de septiembre de 2026
 
 ## Duplicar pantalla principal sin driver
 

@@ -20,6 +20,29 @@ Steam**. Abre primero WindowDeck en el PC, elige **Extender escritorio** o
 **Duplicar pantalla principal** y pulsa **Iniciar**. El cliente funciona igual
 en ambos modos; solo extensión requiere el driver virtual de Windows.
 
+En **Duplicar**, el perfil automático usa la salida disponible al abrir el
+cliente, hasta 2560 × 1440. Un escritorio 16:9 llega a 1280 × 720 en la pantalla
+integrada; en una TV 4K puede llegar a 2560 × 1440 y ampliarse hasta la salida.
+El host nunca amplía una fuente menor. Ambos extremos deben estar actualizados.
+Conecta la TV antes de abrir WindowDeck; si la conectas durante la sesión,
+cierra y abre el cliente para renegociar la calidad con la nueva salida.
+Si al conectar la TV la imagen sigue rodeada de bandas, comprueba que Steam
+ofrezca al juego la resolución de la pantalla externa (opción **Nativa**, si
+está disponible). El registro `native_display output=...` indica el tamaño
+que Gamescope entrega realmente a WindowDeck.
+
+Para fijar un perfil de duplicación, añade `--quality deck`, `--quality 1080p`
+o `--quality 1440p` a las opciones del cliente. Por ejemplo:
+
+```bash
+flatpak run io.github.ik3rurru.WindowDeck --fullscreen --quality 1080p
+```
+
+El perfil indica un máximo, conservando proporción y tamaño de la fuente.
+`--quality auto` restaura la selección automática. Una resolución mayor exige
+más red y trabajo de codificación; prueba 1080p o Deck si aparecen cortes.
+Extender escritorio mantiene su modo de 1280 × 800.
+
 Si añades el destino manualmente, también puedes utilizar `/usr/bin/flatpak`
 con estas opciones de lanzamiento:
 

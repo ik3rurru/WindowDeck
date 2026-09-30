@@ -42,15 +42,19 @@ def read(sock):
     return kind, payload[3:]
 
 
-def handshake(sock, legacy):
+def handshake(sock, legacy, bounds):
     sock.settimeout(15)
     sock.sendall(message(1, struct.pack(">H", 11) + b"mirror-test"))
     assert read(sock)[0] == 1
-    sock.sendall(message(2, struct.pack(">HHHB", 1280, 800, 60, 2 if legacy else 4 | 128)))
+    sock.sendall(message(2, struct.pack(">HHHB", *bounds, 60, 2 if legacy else 4 | 128)))
     kind, body = read(sock)
     assert kind == 3
     session, width, height, fps, codec = struct.unpack(">QHHHB", body)
-    assert (width, height, fps, codec) == (1280, 800, 60, 2 if legacy else 3)
+    assert (fps, codec) == (60, 2 if legacy else 3)
+    assert 2 <= width <= bounds[0] and 2 <= height <= bounds[1], (width, height)
+    if legacy:
+        assert width <= 1280 and height <= 800, (width, height)
+    assert width % 2 == height % 2 == 0, (width, height)
     probes = 0
     while True:
         kind, body = read(sock)
@@ -62,7 +66,7 @@ def handshake(sock, legacy):
             assert kind == 6
             sock.sendall(message(7, body))
     assert probes == (0 if legacy else 64), probes
-    return session
+    return session, (width, height)
 
 
 def receive(sock, session, seconds):
@@ -89,7 +93,7 @@ def receive(sock, session, seconds):
     return encoded
 
 
-def probe(encoded, legacy, ffprobe):
+def probe(encoded, legacy, ffprobe, expected_size):
     result = subprocess.run([
         ffprobe, "-v", "error", "-f", "mpegts" if legacy else "h264", "-i", "pipe:0",
         "-count_frames", "-show_entries", "stream=codec_name,width,height,nb_read_frames",
@@ -97,8 +101,10 @@ def probe(encoded, legacy, ffprobe):
     ], input=encoded, capture_output=True, timeout=20, check=True, **HIDDEN)
     assert not result.stderr, result.stderr.decode(errors="replace")
     video = json.loads(result.stdout)["streams"][0]
-    assert (video["codec_name"], video["width"], video["height"]) == ("h264", 1280, 800), video
-    assert int(video["nb_read_frames"]) >= 30, video
+    assert (video["codec_name"], video["width"], video["height"]) == ("h264", *expected_size), video
+    # WGC can emit only changed desktop images. A static source does not promise
+    # 30 frames in this interval; this is a decoding/negotiation test, not an FPS benchmark.
+    assert int(video["nb_read_frames"]) >= 1, video
     return video
 
 
@@ -127,11 +133,13 @@ def main():
                     assert host.poll() is None, "host failed to start"
                     assert time.monotonic() < deadline, "host startup timed out"
                     time.sleep(.05)
-                for attempt, legacy in enumerate((False, True, False)):
+                cases = ((False, (1280, 800)), (True, (65535, 65535)),
+                         (False, (1920, 1080)), (False, (2560, 1440)), (False, (1280, 800)))
+                for attempt, (legacy, bounds) in enumerate(cases):
                     with socket.create_connection(address, timeout=10) as sock:
-                        session = handshake(sock, legacy)
+                        session, video_size = handshake(sock, legacy, bounds)
                         encoded = receive(sock, session, 12 if attempt == 0 else 2)
-                        if attempt == 2:
+                        if attempt == len(cases) - 1:
                             stop.touch()
                             deadline = time.monotonic() + 5
                             while True:
@@ -143,13 +151,14 @@ def main():
                                 assert time.monotonic() < deadline, "Stop did not finish capture"
                     # Decode after closing the connection so this work cannot stall the host.
                     print(json.dumps({"attempt": attempt, "transport": "mpegts" if legacy else "h264_frames",
-                                      **probe(encoded, legacy, args.ffprobe)}), flush=True)
+                                      **probe(encoded, legacy, args.ffprobe, video_size)}), flush=True)
                 assert host.wait(timeout=8) == 0
                 states = (folder / "host.out").read_text()
                 logs = (folder / "host.log").read_text(encoding="utf-8")
-                assert states.count("windowdeck_state=streaming") == 3, states
+                assert states.count("windowdeck_state=streaming") == len(cases), states
                 assert "windowdeck_state=stopped" in states, states
-                assert logs.count("event=mirror_capture_selected") == 3, logs
+                assert logs.count("event=mirror_capture_selected") == len(cases), logs
+                assert logs.count('scale_filter="bicubic"') == len(cases), logs
                 for forbidden in ("event=driver_capture_selected", "event=virtual_capture_selected",
                                   "encoder_stalled", "monitor_removed_or_changed", "connection_unstable"):
                     assert forbidden not in logs, logs

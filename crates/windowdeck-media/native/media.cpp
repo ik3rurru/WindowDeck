@@ -24,6 +24,7 @@ struct Player {
     FramePtr latest;
     ScalePtr scaler;
     int width = 0, height = 0;
+    int videoWidth = 1280, videoHeight = 800;
     bool fullscreen = false, ready = false;
     uint64_t decoded = 0, presented = 0, dropped = 0, decodeUs = 0, uploadUs = 0, presentUs = 0;
     uint64_t latestReceived = 0, report = Micros(), rxToPresentUs = 0, totalPresented = 0;
@@ -56,7 +57,8 @@ struct Player {
         decoder->thread_count = 1;
         decoder->opaque = this;
         decoder->get_format = Format;
-        decoder->max_pixels = 1280 * 800;
+        // FFmpeg may check padded coded dimensions before cropping an H.264 frame.
+        decoder->max_pixels = ((videoWidth + 31) & ~31) * ((videoHeight + 31) & ~31);
         if (hardware) decoder->hw_device_ctx = av_buffer_ref(hardware.get());
         Check(avcodec_open2(decoder.get(), codec, nullptr), "open H.264 decoder");
     }
@@ -64,6 +66,7 @@ struct Player {
     explicit Player(bool full) : fullscreen(full) {
         SDL_SetMainReady();
         SdlCheck(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         window.reset(SDL_CreateWindow("WindowDeck", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             1280, 800, SDL_WINDOW_RESIZABLE | (full ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0)));
         if (!window) throw std::runtime_error(SDL_GetError());
@@ -74,6 +77,10 @@ struct Player {
         SdlCheck(SDL_GetRendererInfo(renderer.get(), &info));
         fprintf(stderr, "native_renderer name=%s accelerated=%s ffmpeg=%s\n", info.name,
             (info.flags & SDL_RENDERER_ACCELERATED) ? "true" : "false", av_version_info());
+        int outputWidth = 0, outputHeight = 0;
+        SdlCheck(SDL_GetRendererOutputSize(renderer.get(), &outputWidth, &outputHeight));
+        fprintf(stderr, "native_display output=%dx%d fullscreen=%s\n", outputWidth, outputHeight,
+            fullscreen ? "true" : "false");
 #ifdef _WIN32
         const auto type = AV_HWDEVICE_TYPE_D3D11VA;
         hardwareFormat = AV_PIX_FMT_D3D11;
@@ -97,6 +104,8 @@ struct Player {
             const int result = avcodec_receive_frame(decoder.get(), frame.get());
             if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) break;
             Check(result, "decode H.264 frame");
+            if (frame->width != videoWidth || frame->height != videoHeight)
+                throw std::runtime_error("decoded dimensions differ from the negotiated mode");
             ++decoded;
             if (ready) ++dropped;
             const auto arrival = received.find(frame->pts);
@@ -132,6 +141,17 @@ struct Player {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) return false;
+            if (event.type == SDL_RENDER_DEVICE_RESET) {
+                // SDL invalidates streaming textures too when the renderer's
+                // device changes. Recreate even if the video size is unchanged.
+                texture.reset();
+            }
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                int outputWidth = 0, outputHeight = 0;
+                SdlCheck(SDL_GetRendererOutputSize(renderer.get(), &outputWidth, &outputHeight));
+                fprintf(stderr, "native_display output=%dx%d fullscreen=%s\n", outputWidth, outputHeight,
+                    fullscreen ? "true" : "false");
+            }
             if (event.type == SDL_KEYDOWN) {
                 if (event.key.keysym.sym == SDLK_F11) fullscreen = !fullscreen;
                 else if (event.key.keysym.sym == SDLK_ESCAPE) fullscreen = false;
@@ -150,13 +170,12 @@ struct Player {
                 Check(av_hwframe_transfer_data(transfer.get(), frame, 0), "download decoded frame for SDL");
                 frame = transfer.get();
             }
-            if (frame->width <= 0 || frame->height <= 0 || frame->width > 1280 || frame->height > 800)
-                throw std::runtime_error("decoded dimensions exceed the negotiated mode");
-            if (width != frame->width || height != frame->height) {
+            if (!texture || width != frame->width || height != frame->height) {
                 width = frame->width; height = frame->height;
                 texture.reset(SDL_CreateTexture(renderer.get(), SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, width, height));
                 if (!texture) throw std::runtime_error(SDL_GetError());
                 SdlCheck(SDL_RenderSetLogicalSize(renderer.get(), width, height));
+                fprintf(stderr, "native_video size=%dx%d\n", width, height);
             }
             FramePtr converted;
             if (frame->format != AV_PIX_FMT_YUV420P) {
@@ -202,12 +221,19 @@ struct Player {
         OpenDecoder();
         SDL_SetWindowTitle(window.get(), "WindowDeck - reconectando...");
     }
+    void Configure(int w, int h) {
+        if (w < 2 || h < 2 || w > 2560 || h > 1440 || (w & 1) || (h & 1))
+            throw std::runtime_error("invalid negotiated video dimensions");
+        videoWidth = w; videoHeight = h;
+        Reset();
+    }
 };
 
 void SelfTest() {
     // Separate diagnostic process: never changes the user's display or captures it.
     SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
     Player player(false);
+    player.Configure(128, 80);
     const AVCodec* implementation = avcodec_find_encoder_by_name("libx264");
     if (!implementation) throw std::runtime_error("self-test requires libx264");
     CodecPtr encoder(avcodec_alloc_context3(implementation));
@@ -241,11 +267,30 @@ void SelfTest() {
             if (decoded->width != 128 || decoded->height != 80 || std::abs(decoded->data[0][0] - (40 + i * 20)) > 4)
                 throw std::runtime_error("test decoded image does not match the generated pattern");
             if (!player.Poll()) throw std::runtime_error("test player closed");
+            if (!player.texture) throw std::runtime_error("test renderer has no video texture");
+            if (i == 2) {
+                SDL_Event reset{};
+                reset.type = SDL_RENDER_DEVICE_RESET;
+                SdlCheck(SDL_PushEvent(&reset) < 0 ? -1 : 0);
+                if (!player.Poll() || player.texture)
+                    throw std::runtime_error("test renderer did not invalidate its texture");
+            }
+            if (cycle == 2 && i == 5) {
+                // The bitstream may disagree with a valid SessionConfig. Reject
+                // it before uploading a texture, including after reconnect.
+                player.Configure(256, 160);
+                bool rejected = false;
+                try { player.Packet(packet->data, packet->size, frame->pts); }
+                catch (const std::exception& e) {
+                    rejected = std::string(e.what()) == "decoded dimensions differ from the negotiated mode";
+                }
+                if (!rejected) throw std::runtime_error("test accepted unnegotiated frame dimensions");
+            }
             av_packet_unref(packet.get());
         }
     }
     if (player.totalPresented != 18) throw std::runtime_error("test did not present all 18 frames");
-    fprintf(stderr, "native_self_test passed=true frames=18 decoder_resets=3 content_verified=true\n");
+    fprintf(stderr, "native_self_test passed=true frames=18 decoder_resets=3 content_verified=true dimensions_validated=true\n");
 }
 }
 
@@ -265,6 +310,16 @@ extern "C" int wd_player_poll(void* player) {
 extern "C" int wd_player_reset(void* player) {
     try { static_cast<Player*>(player)->Reset(); return 0; }
     catch (const std::exception& e) { wd_last_error = e.what(); return -1; }
+}
+extern "C" int wd_player_configure(void* player, int width, int height) {
+    try { static_cast<Player*>(player)->Configure(width, height); return 0; }
+    catch (const std::exception& e) { wd_last_error = e.what(); return -1; }
+}
+extern "C" int wd_player_output_size(void* player, int* width, int* height) {
+    try {
+        SdlCheck(SDL_GetRendererOutputSize(static_cast<Player*>(player)->renderer.get(), width, height));
+        return 0;
+    } catch (const std::exception& e) { wd_last_error = e.what(); return -1; }
 }
 extern "C" int wd_self_test() {
     try { SelfTest(); SDL_Quit(); return 0; }

@@ -15,6 +15,8 @@ unsafe extern "C" {
     fn wd_player_packet(player: *mut c_void, bytes: *const u8, len: c_int, pts: i64) -> c_int;
     fn wd_player_poll(player: *mut c_void) -> c_int;
     fn wd_player_reset(player: *mut c_void) -> c_int;
+    fn wd_player_configure(player: *mut c_void, width: c_int, height: c_int) -> c_int;
+    fn wd_player_output_size(player: *mut c_void, width: *mut c_int, height: *mut c_int) -> c_int;
     fn wd_self_test() -> c_int;
     #[cfg(windows)]
     fn wd_encoder_open(mapping: *const c_char, codec: *const c_char) -> *mut c_void;
@@ -64,6 +66,22 @@ pub fn gpu_self_test(codec: &str) -> io::Result<()> {
 
 pub struct Player(NonNull<c_void>);
 impl Player {
+    pub fn configure(&mut self, width: u16, height: u16) -> io::Result<()> {
+        // SAFETY: unique owned handle; native code validates dimensions and resets the decoder.
+        if unsafe { wd_player_configure(self.0.as_ptr(), i32::from(width), i32::from(height)) } < 0
+        {
+            return Err(error());
+        }
+        Ok(())
+    }
+    pub fn output_size(&mut self) -> io::Result<(u32, u32)> {
+        let (mut width, mut height) = (0, 0);
+        // SAFETY: live handle on its SDL thread and valid writable integer pointers.
+        if unsafe { wd_player_output_size(self.0.as_ptr(), &mut width, &mut height) } < 0 {
+            return Err(error());
+        }
+        Ok((width.max(0) as u32, height.max(0) as u32))
+    }
     pub fn new(fullscreen: bool) -> io::Result<Self> {
         // SAFETY: constructor transfers sole ownership or returns null on failure.
         NonNull::new(unsafe { wd_player_open(i32::from(fullscreen)) })

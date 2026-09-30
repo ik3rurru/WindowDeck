@@ -33,8 +33,11 @@ no lo instala. Duplicar no requiere instalarlo.
 2. Abre **WindowDeck** en el modo escritorio de la Steam Deck. El descubrimiento
    automático localiza el PC; si encuentra varios, permite elegirlo.
 3. En extensión, mueve una ventana al escritorio de la Deck. En duplicación,
-   verás la pantalla principal del PC, ajustada a 1280 × 800 conservando su
-   proporción. Cierra el cliente o pulsa **Detener** en Windows para terminar.
+   verás la pantalla principal del PC conservando su proporción. El cliente
+   actualizado elige automáticamente según su pantalla, hasta 2560 × 1440;
+   en la Deck integrada una fuente 16:9 llega a 1280 × 720. Ambos extremos
+   necesitan la actualización local para transmitir por encima de ese tamaño.
+   Cierra el cliente o pulsa **Detener** en Windows para terminar.
    Solo en extensión se retira el monitor y se recuperan las ventanas.
 
 El panel muestra el estado de conexión y permite abrir los registros. El host
@@ -42,7 +45,7 @@ se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
 El host negocia vídeo con el reproductor integrado; los clientes anteriores
 siguen siendo compatibles mediante MPEG-TS. En la Deck, extrae el paquete
-`WindowDeck-0.3.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+`WindowDeck-0.3.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
 bash install-steamdeck.sh
@@ -70,6 +73,12 @@ El cliente anterior utiliza `--h264-test` en lugar de `--native`.
 Cerrar la X cancela la reconexión; F11 alterna pantalla completa y Escape vuelve
 al modo ventana. El panel de Windows y la gestión de sus procesos están en Rust.
 El acceso directo de Windows se crea con `scripts/install-shortcut.ps1`.
+
+Para una TV, conéctala antes de abrir el cliente y permite a Steam usar su
+resolución nativa. Los perfiles `--quality deck`, `--quality 1080p` y
+`--quality 1440p` permiten limitar manualmente la duplicación; por defecto se
+usa `--quality auto`. El host reduce con filtro bicúbico y adapta el bitrate.
+Detalles y límites en [calidad de imagen](docs/upscaling-quality.md).
 
 ## Seguridad actual
 

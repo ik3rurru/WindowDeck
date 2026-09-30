@@ -1,6 +1,8 @@
 use std::fmt;
 use std::io::{self, Cursor, Read, Write};
 
+pub mod quality;
+
 pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const VIDEO_CHUNK_OVERHEAD: usize = 32;

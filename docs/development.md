@@ -20,7 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 El primer comando obtiene SDK con versión y SHA256 fijados, compila release y
 copia FFmpeg/SDL junto a los binarios. `-Download` solo descarga archivos ausentes.
 El segundo compila el auxiliar y el paquete del driver; no instala la DLL.
-El ZIP queda en `target/package-<identificador>/WindowDeck-0.3.0-windows-x64.zip` e incluye versiones,
+El ZIP queda en `target/package-<identificador>/WindowDeck-0.3.1-windows-x64.zip` e incluye versiones,
 hashes, licencias y fuentes. La validación en un Windows limpio sigue pendiente.
 `scripts/package-windows.ps1 -Release` exige un árbol limpio e incluye las
 fuentes del commit exacto. El empaquetado normal solo necesita compilar el
@@ -79,9 +79,13 @@ Desde una terminal normal con FFmpeg en PATH:
 
 No requiere un broker de pantalla ni `WINDOWDECK_DISPLAY_EXE`. El host directo
 no configura el firewall; el panel sí prepara las reglas habituales de LAN.
-Se captura la principal de Windows, se escala en GPU conservando proporción
-a 1280 × 800 y se negocia el mismo vídeo H.264 que con extensión. El cliente
-no necesita opciones nuevas. Véase [ADR 0021](adr/0021-primary-screen-mirroring.md).
+Se captura la principal de Windows, se reduce en GPU con bicúbico conservando
+proporción hasta el máximo anunciado por el cliente (límite 2560 × 1440)
+sin ampliar una fuente menor, y se negocia el mismo
+códec H.264 que con extensión. El cliente selecciona calidad automática al abrir;
+se puede fijar con `--quality deck|1080p|1440p`. Conecta la TV antes de abrirlo.
+`WINDOWDECK_MIRROR_BITRATE_MBPS=28` permite ajustar el objetivo del host (4–100).
+Véase [ADR 0021](adr/0021-primary-screen-mirroring.md).
 
 Prueba manual local con el escritorio desbloqueado y FFmpeg/ffprobe en PATH:
 

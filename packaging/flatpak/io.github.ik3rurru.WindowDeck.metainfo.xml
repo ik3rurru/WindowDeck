@@ -17,6 +17,7 @@
   <url type="homepage">https://github.com/ik3rurru/WindowDeck</url>
   <url type="bugtracker">https://github.com/ik3rurru/WindowDeck/issues</url>
   <releases>
+    <release version="0.3.1" date="2026-09-30" type="development"/>
     <release version="0.3.0" date="2026-09-28" type="development"/>
     <release version="0.2.2" date="2026-09-13" type="development"/>
     <release version="0.2.1" date="2026-09-13" type="development"/>

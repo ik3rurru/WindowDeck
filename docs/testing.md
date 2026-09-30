@@ -1,5 +1,131 @@
 # Pruebas y mediciones
 
+## Aceptación visual en TV 4K — 30 de septiembre de 2026
+
+El usuario confirma «la nitidez es excelente» y da la prueba totalmente por
+válida. Sesión real de duplicación con la Deck en modo escritorio y TV
+DisplayPort/HDMI activa a 3840 × 2160/60 Hz, escala de escritorio 2.
+SDL confirma salida física 3840 × 2160; el perfil Auto negocia 2560 × 1440
+a 60 FPS y usa el decoder VAAPI con renderer OpenGL acelerado.
+Esta aceptación no constituye una medición de latencia física o carga comparativa.
+
+El primer arranque por IP sin `--native` falló la negociación; se repitió
+con `--native --fullscreen --quality auto` y se verificó transmisión activa.
+Tras unos doce minutos el usuario solicitó cerrar. Se terminó la instancia
+Flatpak concreta y el host, verificando ausencia de cliente, host y encoder.
+Este cierre directo no se contabiliza como prueba del botón Detener.
+Registros Windows en `target/tv4k-20260930/`; registro de cliente en
+`/home/deck/Downloads/windowdeck-tv4k-20260930.log`.
+
+## Perfiles de calidad y bicúbico — 29 de septiembre de 2026
+
+Implementados auto/Deck/1080p/1440p en el cliente integrado y negociación de
+duplicación hasta 2560 × 1440. Se conserva proporción, no se amplía la fuente
+y la reducción GPU usa bicúbico. Bitrates objetivo iniciales 16/28/40 Mbps.
+No se añaden dependencias ni se activa FSR.
+
+Validación en Windows:
+
+- Formato y Clippy base/nativo correctos. 65 pruebas Rust del workspace con
+  todas las funciones superadas. Multicast y fixture mantienen su exclusión
+  habitual; la regresión externa FFmpeg no se ha repetido en esta fase.
+- Compilación release y autoprueba multimedia correctas: 18 imágenes, ciclos
+  de reinicio y rechazo de un bitstream con dimensiones distintas de la sesión.
+- Arnés nativo actual y handshake antiguo correctos a 1280 × 800/720; el
+  nuevo ensayo `--high-resolution` decodifica 1920 × 1080, interrumpe una unidad
+  fragmentada y reconecta a 2560 × 1440, terminando con Stop.
+- Captura real de la principal 2560 × 1440: 707 imágenes a 1280 × 720,
+  108 MPEG-TS a 1280 × 720, 108 integradas a 1920 × 1080, 108 a 2560 × 1440
+  y 108 al volver a 1280 × 720. El arnés completa reconexiones y parada.
+  El vídeo se mantiene en memoria. Se corrigió una comprobación del formato
+  del log y el mínimo fijo de 30 imágenes: WGC puede producir pocas imágenes
+  cuando el escritorio está estático. El ensayo verifica decodificación,
+  dimensiones y ciclo de sesión; no acredita rendimiento ni latencia física.
+
+Binarios actualizados en `target/release`; el panel existente utiliza ese host.
+Tras despertar la Deck se ha compilado e instalado esta fase por SSH en
+`192.168.1.18`, reutilizando el SDK Freedesktop 25.08 y el caché existentes.
+Pasan las pruebas Rust de cliente/protocolo, la autoprueba con VAAPI y los tres
+ensayos del cliente (actual, handshake antiguo y 1080p → 1440p). La autoprueba
+se repite sobre el Flatpak instalado; su ejecutable coincide byte a byte con
+el compilado. La ayuda confirma los cuatro perfiles.
+
+- Commit Flatpak instalado:
+  `79ef91aed3cef7f32a78702afd902943827ba798efdc88ac064c900c8a99b21f`.
+- SHA256 del paquete:
+  `408953acddefedc2b2e74395172214140f0fcd622095a793b5ef1c0eec653067`.
+- SHA256 del ejecutable instalado:
+  `053fee0588e9ba6b2ea96805ade47241ec237a7ca8ee2bb7d66ad0e8fa6376d4`.
+- Evidencias y paquete en la Deck:
+  `/home/deck/Downloads/windowdeck-quality-20260929/`.
+- Acceso de Steam comprobado y escritorio actualizado: queda únicamente
+  `WindowDeck.desktop`, sin recrear el antiguo acceso de control.
+
+Fuentes y scripts en `target/windowdeck-quality-20260929/`; SHA256 del
+archivo `source.tar.gz`:
+`D6DC2252C49133E009F4452FAF7D1E79F08E55031111F85A0DB304A6748FDC10`.
+
+Pendientes: aceptación visual del bicúbico, comparación de carga y red a
+1080p/1440p y TV 4K. Las pruebas automáticas no acreditan presentación física
+en el televisor. El usuario sí ha
+confirmado que el ajuste al marco de la versión anterior funciona. Para cambiar
+la calidad automática tras HDMI, conectar la TV y reabrir el cliente actualizado.
+
+## Revisión de host y cliente — 29 de septiembre de 2026
+
+La duplicación proporcional negocia 1280 × 720 en la pantalla principal 16:9.
+La revisión encontró y corrigió dos fallos:
+
+- El EOF del encoder enviaba `Stop` incluso cuando se perdía la captura o
+  cambiaba el monitor. Ahora el EOF inesperado de la cola en vivo termina la
+  conexión para permitir reconectar y descarta la última unidad incompleta.
+  Solo una petición explícita de Detener permite el final normal del vídeo.
+- El cliente ignoraba `SDL_RENDER_DEVICE_RESET` y reutilizaba una textura
+  invalidada si el tamaño del vídeo seguía igual. Ahora la recrea al recibir
+  el siguiente fotograma. La autoprueba inyecta ese evento entre fotogramas.
+
+Formato, Clippy con todas las funciones y pruebas del workspace correctos en
+Windows. Superadas además la prueba de codificación/fragmentación FFmpeg,
+la autoprueba multimedia (18 fotogramas y tres reinicios del decoder) y ambos
+ensayos de `test-native-client.py`. Estos últimos reconectan de 1280 × 800 a
+1280 × 720, con y sin la validación de conexión del protocolo actual.
+
+`test-mirror-host.py` con captura real supera tres conexiones: 705 fotogramas
+H.264, 89 MPEG-TS y 107 H.264 tras reconectar, todos 1280 × 720. Detener cierra
+normalmente. No se guarda el vídeo. Binarios debug y release recompilados.
+
+Esta revisión no valida la conexión/desconexión HDMI física ni un cambio real
+de modo de pantalla durante la sesión. Los cambios son locales; no se ha
+publicado otra release.
+
+### Instalación del cliente en la Steam Deck
+
+Compilado e instalado por SSH el cliente 0.3.0 actualizado el 29 de septiembre,
+usando el SDK Freedesktop 25.08 ya disponible. Pasan las pruebas Rust de cliente
+y protocolo, la autoprueba multimedia y las dos variantes del arnés nativo
+(handshake actual y antiguo), incluida la reconexión con distinta resolución.
+La autoprueba del Flatpak instalado confirma VAAPI, 18 frames, tres reinicios
+del decoder y contenido verificado. El ejecutable instalado coincide byte a
+byte con el compilado.
+
+- Commit Flatpak instalado:
+  `26d974c1ccc346d5c1e977d60f6ebb65d2f4d3d78f5868642116236b063efaea`.
+- SHA256 del bundle:
+  `95608f033a943cab372795078e0ea8d99e92738f060236d7f94eda77ba7a5054`.
+- Evidencias y paquete en la Deck:
+  `/home/deck/Downloads/windowdeck-update-20260929-fa48e641/`.
+- El lanzador existente de Steam devuelve la versión instalada. Se actualiza
+  el acceso del escritorio y se crea `~/.local/bin/windowdeck`. El antiguo
+  acceso de control remoto abre ahora el cliente sin `--input`; se conserva
+  una copia del acceso anterior junto a las evidencias. El Flatpak ya no
+  solicita permiso de dispositivos de entrada.
+
+Posteriormente, a petición del usuario, se eliminó el acceso duplicado
+`WindowDeck-Control.desktop`; queda solo `WindowDeck.desktop`.
+
+Pendiente la aceptación visual con ambos extremos actualizados y HDMI/4K.
+Estas pruebas automáticas no acreditan la presentación física en el televisor.
+
 ## Preparación de 0.3.0 — 28 de septiembre de 2026
 
 Recompilado el workspace con versión 0.3.0; `Cargo.lock` solo cambia las seis

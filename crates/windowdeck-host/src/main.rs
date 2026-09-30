@@ -300,36 +300,41 @@ fn serve(
         },
     )?;
 
-    let (width, height, fps) = stream_format(codec, monitor)?;
-    let validate_connection = match read_message(&mut stream)? {
+    let (max_width, max_height, max_fps, codecs) = match read_message(&mut stream)? {
         Message::Capabilities {
             max_width,
             max_height,
             max_fps,
             codecs,
-        } if (codecs & codec.capability() != 0
-            || (codec == VideoCodec::H264Frames
-                && codecs & VideoCodec::H264.capability() != 0))
-            && width <= max_width
-            && height <= max_height
-            && fps <= max_fps =>
-        {
-            if codec == VideoCodec::H264Frames && codecs & codec.capability() == 0 {
-                codec = VideoCodec::H264;
-                monitor = legacy_capture_target(monitor);
-                emit(
-                    Level::Info,
-                    "native_host_fallback",
-                    &[("reason", "legacy_client")],
-                );
-            }
-            state = state.apply(ConnectionEvent::Negotiated)?;
-            codecs & connection::CAPABILITY != 0
-        }
-        Message::Capabilities { .. } => {
-            return Err("el cliente no admite la configuración solicitada".into());
-        }
+        } => (max_width, max_height, max_fps, codecs),
         _ => return Err("se esperaba Capabilities".into()),
+    };
+    let bounds = if codecs & VideoCodec::H264Frames.capability() == 0 {
+        // Keep the legacy MPEG-TS path at its existing size and bandwidth.
+        (max_width.min(1280), max_height.min(800))
+    } else {
+        (max_width, max_height)
+    };
+    let (width, height, fps) = stream_format(codec, monitor, bounds)?;
+    let validate_connection = if (codecs & codec.capability() != 0
+        || (codec == VideoCodec::H264Frames && codecs & VideoCodec::H264.capability() != 0))
+        && width <= max_width
+        && height <= max_height
+        && fps <= max_fps
+    {
+        if codec == VideoCodec::H264Frames && codecs & codec.capability() == 0 {
+            codec = VideoCodec::H264;
+            monitor = legacy_capture_target(monitor);
+            emit(
+                Level::Info,
+                "native_host_fallback",
+                &[("reason", "legacy_client")],
+            );
+        }
+        state = state.apply(ConnectionEvent::Negotiated)?;
+        codecs & connection::CAPABILITY != 0
+    } else {
+        return Err("el cliente no admite la configuración solicitada".into());
     };
     let session_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
     write_message(
@@ -398,7 +403,7 @@ fn serve(
     state.apply(ConnectionEvent::Started)?;
 
     if let Some(index) = monitor {
-        return capture_stream(stream, index, session_id, codec);
+        return capture_stream(stream, index, session_id, codec, (width, height));
     }
 
     publish_state("streaming");
@@ -487,6 +492,7 @@ fn capture_stream(
     target: CaptureTarget,
     session_id: u64,
     codec: VideoCodec,
+    size: (u16, u16),
 ) -> Result<(), AnyError> {
     let index = match target {
         CaptureTarget::PrimaryMonitor => {
@@ -494,6 +500,7 @@ fn capture_stream(
                 stream,
                 session_id,
                 codec == VideoCodec::H264Frames,
+                size,
             );
         }
         CaptureTarget::WindowDeckNative => return capture::stream_native_h264(stream, session_id),
@@ -528,6 +535,7 @@ fn capture_stream(
     _target: CaptureTarget,
     _session_id: u64,
     _codec: VideoCodec,
+    _size: (u16, u16),
 ) -> Result<(), AnyError> {
     Err("la captura de pantalla solo está disponible en Windows".into())
 }
@@ -535,17 +543,18 @@ fn capture_stream(
 fn stream_format(
     codec: VideoCodec,
     monitor: Option<CaptureTarget>,
+    bounds: (u16, u16),
 ) -> Result<(u16, u16, u16), AnyError> {
     match codec {
         VideoCodec::Rgb332 => Ok((WIDTH, HEIGHT, FPS)),
         VideoCodec::H264 | VideoCodec::H264Frames => {
-            h264_format(monitor.ok_or("H.264 requiere un monitor")?)
+            h264_format(monitor.ok_or("H.264 requiere un monitor")?, bounds)
         }
     }
 }
 
 #[cfg(windows)]
-fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
+fn h264_format(target: CaptureTarget, bounds: (u16, u16)) -> Result<(u16, u16, u16), AnyError> {
     match target {
         CaptureTarget::Monitor(index) => {
             capture::size(index)?;
@@ -553,8 +562,11 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
         CaptureTarget::WindowDeck => {
             capture::virtual_monitor()?;
         }
-        CaptureTarget::PrimaryMonitor
-        | CaptureTarget::WindowDeckAuto
+        CaptureTarget::PrimaryMonitor => {
+            let (width, height) = capture::primary_mirror_size(bounds)?;
+            return Ok((width, height, capture::ENCODE_FPS as u16));
+        }
+        CaptureTarget::WindowDeckAuto
         | CaptureTarget::WindowDeckCpu
         | CaptureTarget::WindowDeckNative => {}
     }
@@ -562,7 +574,7 @@ fn h264_format(target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
 }
 
 #[cfg(not(windows))]
-fn h264_format(_target: CaptureTarget) -> Result<(u16, u16, u16), AnyError> {
+fn h264_format(_target: CaptureTarget, _bounds: (u16, u16)) -> Result<(u16, u16, u16), AnyError> {
     Err("la codificación H.264 solo está disponible en Windows".into())
 }
 

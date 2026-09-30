@@ -4,6 +4,22 @@ Fecha: 28 de septiembre de 2026. Estado: implementado; el usuario confirma
 funcionamiento satisfactorio. La comparación cuantitativa de rendimiento
 con extensión sigue pendiente.
 
+Revisión del 29 de septiembre: el vídeo de duplicación usa la proporción de
+la pantalla principal, con un máximo de 1280 × 800 y dimensiones pares. Una
+fuente 16:9 produce 1280 × 720. `gfxcapture` dibujaba el contenido 16:9 en
+la parte superior de su lienzo fijo 1280 × 800 y codificaba una franja negra
+inferior. Ahora el cliente centra la imagen al escalarla a su salida. El host
+vigila también el tamaño de la fuente y termina la sesión para que el cliente
+reconecte si cambia. La salida HDMI debe comprobarse en la Deck: Gamescope
+puede exponer a la aplicación una resolución distinta de la TV.
+
+Actualización de calidad, 29 de septiembre: la duplicación ahora respeta el
+máximo anunciado por el cliente integrado, hasta 2560 × 1440, sin ampliar una
+fuente menor. La reducción de `gfxcapture` usa bicúbico. El modo automático del
+cliente toma el tamaño de su salida al abrir; hay perfiles Deck/1080p/1440p.
+MPEG-TS y clientes con límite 1280 × 800 conservan ese máximo. Los detalles de
+implementación y bitrate se encuentran en [calidad de imagen](../upscaling-quality.md).
+
 ## Motivación
 
 Ofrecer una alternativa a extender el escritorio: transmitir lo que ya muestra
@@ -21,10 +37,12 @@ presentación siguen contribuyendo al resultado.
   y se pasa su HMONITOR a `gfxcapture`. No se supone que la primera salida DXGI
   de la primera GPU sea la principal. Esta entrega no incluye selector de otros
   monitores ni captura de un escritorio combinado.
-- FFmpeg realiza el escalado y las bandas en GPU con `width=1280:height=800`
-  y `resize_mode=scale_aspect`, antes de descargar BGRA. Se conserva libx264,
-  16 Mbps, hasta 60 FPS y el transporte integrado por unidades de acceso, con
-  MPEG-TS para clientes anteriores. No se modifica el cliente ni el protocolo.
+- FFmpeg escala en GPU a un tamaño proporcional con `resize_mode=scale_aspect`
+  y `scale_mode=bicubic`, antes de descargar BGRA. Se conserva libx264,
+  con objetivos 16/28/40 Mbps según tamaño, hasta 60 FPS y transporte por unidades de acceso, con
+  MPEG-TS para clientes anteriores. La resolución real viaja en el protocolo
+  existente. El cliente SDL escala con filtro lineal y registra el tamaño de
+  salida que recibe de SteamOS.
 - La negociación con un cliente antiguo conserva la fuente física. Solo la
   ruta experimental del driver GPU cambia al driver CPU para MPEG-TS.
 - Duplicar no verifica ni inicia `windowdeck-display.exe`, no adquiere una
