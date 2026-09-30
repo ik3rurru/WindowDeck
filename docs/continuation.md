@@ -2,11 +2,15 @@
 
 ## Release 0.3.1
 
-A petición del usuario se preparan commit y etiqueta `v0.3.1` con los perfiles
-de calidad y la aceptación en TV 4K. Versión, metadatos y notas actualizados.
-Formato, pruebas Rust del workspace con todas las funciones y Clippy correctos.
-El workflow de release generará Windows, Flatpak y paquete Steam Deck;
-comprobar su resultado antes de considerar completada la publicación.
+Publicada [v0.3.1 preliminar](https://github.com/ik3rurru/WindowDeck/releases/tag/v0.3.1),
+commit `e5b8de9`, con perfiles de calidad y aceptación en TV 4K. Formato,
+pruebas Rust con todas las funciones y Clippy locales correctos. Los siete
+trabajos del [workflow Release](https://github.com/ik3rurru/WindowDeck/actions/runs/36693152754)
+terminaron correctamente: comprobaciones Windows/Linux, paquetes y publicación.
+Descargados Windows, Steam Deck, Flatpak y manifiesto; tamaños y SHA256
+contrastados con GitHub. Evidencia: `target/release-v0.3.1/verification.json`.
+La instalación de la Deck conserva la compilación local 0.3.0 ya aceptada;
+esta publicación no cambia la instalación ni el driver.
 
 ## Prueba en TV 4K aceptada
 

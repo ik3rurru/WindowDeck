@@ -1,5 +1,15 @@
 # Pruebas y mediciones
 
+## Publicación 0.3.1 — 30 de septiembre de 2026
+
+Release preliminar `v0.3.1`, fuentes `e5b8de9`. Formato, pruebas del workspace
+con todas las funciones y Clippy correctos en local. El workflow
+https://github.com/ik3rurru/WindowDeck/actions/runs/36693152754 completa los siete
+trabajos, incluidas pruebas base/nativas en Windows/Linux y paquetes Windows/Deck.
+Las tres descargas y `SHA256SUMS.txt` se descargan y verifican por tamaño y
+SHA256 contra los digests de GitHub. Evidencia en
+`target/release-v0.3.1/verification.json`. No se actualiza la instalación de la Deck.
+
 ## Aceptación visual en TV 4K — 30 de septiembre de 2026
 
 El usuario confirma «la nitidez es excelente» y da la prueba totalmente por
