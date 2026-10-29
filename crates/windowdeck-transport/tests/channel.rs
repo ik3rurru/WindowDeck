@@ -667,14 +667,26 @@ fn truncated_short_and_reordered_records_are_rejected() {
 }
 
 #[test]
-fn shutdown_handles_unblock_a_waiting_reader() {
+fn shutdown_handles_end_the_session_of_a_waiting_reader() {
     let devices = Devices::new("shutdown", true);
     let (address, host) = host_once(devices.host.clone(), None);
     let Established::Session(mut client, _) = devices.connect(address, Intent::Session).unwrap()
     else {
         panic!("session expected");
     };
-    let _server = host.join().unwrap();
+    let HostResult::Session(mut server, _) = host.join().unwrap() else {
+        panic!("host session expected");
+    };
+    // Like the host, the peer closes once it reads the end of the stream.
+    let peer = thread::spawn(move || {
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut byte = [0];
+        let ended = matches!(server.read(&mut byte), Ok(0));
+        drop(server);
+        ended
+    });
     client.set_read_timeout(None).unwrap();
     let handle = client.shutdown_handle().unwrap();
     let (done, finished) = mpsc::channel();
@@ -682,7 +694,12 @@ fn shutdown_handles_unblock_a_waiting_reader() {
         let _ = done.send(read_message(&mut client).is_err());
     });
     thread::sleep(Duration::from_millis(100));
+    // Linux wakes the blocked reader at once; Windows only when the peer closes.
     handle.shutdown(Shutdown::Both).unwrap();
+    assert!(
+        peer.join().unwrap(),
+        "the peer must see a clean end of stream"
+    );
     assert!(finished.recv_timeout(Duration::from_secs(3)).unwrap());
 }
 
