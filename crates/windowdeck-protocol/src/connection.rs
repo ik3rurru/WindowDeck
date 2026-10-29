@@ -5,6 +5,30 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+/// A byte stream whose blocking operations can be bounded, such as a TCP socket
+/// or the encrypted channel built on top of one.
+pub trait TimedStream: Read + Write {
+    fn read_timeout(&self) -> io::Result<Option<Duration>>;
+    fn write_timeout(&self) -> io::Result<Option<Duration>>;
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+}
+
+impl TimedStream for TcpStream {
+    fn read_timeout(&self) -> io::Result<Option<Duration>> {
+        TcpStream::read_timeout(self)
+    }
+    fn write_timeout(&self) -> io::Result<Option<Duration>> {
+        TcpStream::write_timeout(self)
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_write_timeout(self, timeout)
+    }
+}
+
 pub const CAPABILITY: u8 = 0x80;
 pub const PROBE_BYTES: usize = 62_500;
 pub const BURST_PACKETS: usize = 8;
@@ -21,8 +45,8 @@ pub struct Validation {
 
 /// Eight 500 kB bursts at a nominal 16 Mbps, each acknowledged after receipt.
 /// Timeouts bound the whole operation, including partial TCP reads and writes.
-pub fn validate(
-    stream: &mut TcpStream,
+pub fn validate<S: TimedStream>(
+    stream: &mut S,
     session: u64,
     cancelled: impl Fn() -> bool,
 ) -> Result<Validation, ProtocolError> {
@@ -84,13 +108,13 @@ pub fn validate(
     Ok(validation)
 }
 
-struct DeadlineSocket<'a, F> {
-    stream: &'a mut TcpStream,
+struct DeadlineSocket<'a, S, F> {
+    stream: &'a mut S,
     deadline: Instant,
     cancelled: &'a F,
 }
 
-impl<F: Fn() -> bool> DeadlineSocket<'_, F> {
+impl<S: TimedStream, F: Fn() -> bool> DeadlineSocket<'_, S, F> {
     fn remaining(&self) -> io::Result<Duration> {
         if (self.cancelled)() {
             // read_exact/write_all retry Interrupted forever; cancellation is final.
@@ -105,14 +129,14 @@ impl<F: Fn() -> bool> DeadlineSocket<'_, F> {
     }
 }
 
-impl<F: Fn() -> bool> Read for DeadlineSocket<'_, F> {
+impl<S: TimedStream, F: Fn() -> bool> Read for DeadlineSocket<'_, S, F> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         self.stream.set_read_timeout(Some(self.remaining()?))?;
         self.stream.read(bytes)
     }
 }
 
-impl<F: Fn() -> bool> Write for DeadlineSocket<'_, F> {
+impl<S: TimedStream, F: Fn() -> bool> Write for DeadlineSocket<'_, S, F> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.stream.set_write_timeout(Some(self.remaining()?))?;
         self.stream.write(bytes)

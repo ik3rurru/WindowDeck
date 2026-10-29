@@ -15,15 +15,20 @@ use windowdeck_protocol::{
     ConnectionEvent, ConnectionState, Message, ProtocolError, VideoCodec, connection, read_message,
     write_message,
 };
+use windowdeck_transport::{SecureStream, ShutdownHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy, OwnedDisplayHandle};
 use winit::keyboard::{Key, NamedKey};
+use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use winit::window::{Fullscreen, Window, WindowId};
 
+mod canvas;
 mod host_picker;
+mod pairing;
 mod quality;
+use pairing::ClientSecurity;
 use quality::Quality;
 #[cfg(feature = "native-media")]
 mod native;
@@ -45,9 +50,15 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     if matches!(env::args().nth(1).as_deref(), Some("--help" | "-h")) {
         println!(
-            "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--native] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana."
+            "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--native] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n     windowdeck-client --paired-hosts | --forget-host HUELLA|all\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana.\n\nLa conexión va cifrada. La primera vez con un PC, ambos muestran un código\nde seis cifras: confírmalo en la Deck y en el panel de Windows."
         );
         return Ok(());
+    }
+    if matches!(
+        env::args().nth(1).as_deref(),
+        Some("--paired-hosts" | "--forget-host")
+    ) {
+        return pairing::manage(&env::args().skip(1).collect::<Vec<_>>());
     }
     #[cfg(feature = "native-media")]
     if env::args().nth(1).as_deref() == Some("--media-self-test") {
@@ -82,11 +93,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     if options.quality != Quality::Auto && !native {
         return Err("--quality requiere el reproductor --native".into());
     }
-    let mut target = Target::from(options.address.as_str());
+    let security = Arc::new(ClientSecurity::load()?);
+    let mut target = Target::new(options.address.as_str(), security);
+    let mut ui = Ui::default();
     if options.address == "auto" {
         let codec = if options.h264_test { "h264" } else { "rgb332" };
         let mut browser = windowdeck_protocol::discovery::Browser::new(codec)?;
-        let Some(host) = host_picker::choose(&mut browser)? else {
+        let Some(host) = host_picker::choose(&mut browser, &mut ui)? else {
             return Ok(());
         };
         target.address = format!("mdns:{}", host.identity);
@@ -95,15 +108,21 @@ fn run() -> Result<(), Box<dyn Error>> {
     if options.h264_test {
         #[cfg(feature = "native-media")]
         if native {
-            return native::run(target, options.fullscreen, options.quality);
+            return native::run(target, options.fullscreen, options.quality, &mut ui);
         }
-        return receive_h264_test(&target, options.fullscreen, options.ffplay_baseline);
+        return receive_h264_test(
+            &target,
+            options.fullscreen,
+            options.ffplay_baseline,
+            &mut ui,
+        );
     }
-    let (stream, session_id, width, height, _) = connect(&target, VideoCodec::Rgb332)?;
-    let shutdown = stream.try_clone()?;
+    let (stream, session_id, width, height, _) =
+        connect_paired(&target, VideoCodec::Rgb332, &mut ui)?;
+    let shutdown = stream.shutdown_handle()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));
-    let event_loop = EventLoop::<ClientEvent>::with_user_event().build()?;
+    let event_loop = ui.event_loop()?;
     let worker = receive_frames(
         stream,
         session_id,
@@ -125,7 +144,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         start_fullscreen: options.fullscreen,
     };
 
-    event_loop.run_app(&mut app)?;
+    // run_app would keep the exit request of an earlier pairing window and
+    // close at once; run_app_on_demand clears it.
+    event_loop.run_app_on_demand(&mut app)?;
     app.stop()?;
     Ok(())
 }
@@ -180,30 +201,62 @@ struct Target {
     address: String,
     browser: Option<Arc<Mutex<windowdeck_protocol::discovery::Browser>>>,
     video_bounds: (u16, u16),
+    security: Arc<ClientSecurity>,
 }
 
-impl From<&str> for Target {
-    fn from(address: &str) -> Self {
+impl Target {
+    fn new(address: &str, security: Arc<ClientSecurity>) -> Self {
         Self {
             address: address.into(),
             browser: None,
             video_bounds: windowdeck_protocol::quality::DECK,
+            security,
         }
     }
 }
 
-type Connected = (TcpStream, u64, u16, u16, VideoCodec);
+/// The single winit event loop of the process, created only when a window is
+/// needed: winit cannot create a second one after the host picker.
+#[derive(Default)]
+struct Ui {
+    event_loop: Option<EventLoop<ClientEvent>>,
+}
+
+impl Ui {
+    fn event_loop(&mut self) -> Result<&mut EventLoop<ClientEvent>, Box<dyn Error>> {
+        if self.event_loop.is_none() {
+            self.event_loop = Some(EventLoop::<ClientEvent>::with_user_event().build()?);
+        }
+        self.event_loop
+            .as_mut()
+            .ok_or_else(|| "no hay bucle de eventos".into())
+    }
+}
+
+type Connected = (SecureStream, u64, u16, u16, VideoCodec);
 fn connect(target: &Target, codec: VideoCodec) -> Result<Connected, Box<dyn Error>> {
     connect_observed(target, codec, None)
 }
 
-fn connect_observed(
+/// First connection of a run: pairs interactively if the host or this device
+/// does not recognise the other, then retries once.
+fn connect_paired(
     target: &Target,
     codec: VideoCodec,
-    observer: Option<(&AtomicBool, &Mutex<TcpStream>)>,
+    ui: &mut Ui,
 ) -> Result<Connected, Box<dyn Error>> {
+    match connect(target, codec) {
+        Err(error) if pairing::needs_pairing(error.as_ref()) => {
+            pairing::pair_interactively(target, codec, ui, error.as_ref())?;
+            connect(target, codec)
+        }
+        result => result,
+    }
+}
+
+fn open_socket(target: &Target, codec: VideoCodec) -> Result<TcpStream, Box<dyn Error>> {
     let address = target.address.as_str();
-    let mut stream = if let Some(identity) = address.strip_prefix("mdns:") {
+    Ok(if let Some(identity) = address.strip_prefix("mdns:") {
         let codec = if codec != VideoCodec::Rgb332 {
             "h264"
         } else {
@@ -229,10 +282,17 @@ fn connect_observed(
             .parse()
             .map_err(|_| "dirección inválida; usa IP:puerto")?;
         TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT)?
-    };
-    stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    })
+}
+
+fn connect_observed(
+    target: &Target,
+    codec: VideoCodec,
+    observer: Option<(&AtomicBool, &Mutex<ShutdownHandle>)>,
+) -> Result<Connected, Box<dyn Error>> {
+    let address = target.address.as_str();
+    let socket = open_socket(target, codec)?;
+    socket.set_nodelay(true)?;
     if let Some((stopping, shutdown)) = observer {
         let mut watched = shutdown
             .lock()
@@ -240,9 +300,14 @@ fn connect_observed(
         if stopping.load(Ordering::Relaxed) {
             return Err(io::Error::from(io::ErrorKind::Interrupted).into());
         }
-        *watched = stream.try_clone()?;
+        // Closing must also interrupt the encrypted handshake.
+        *watched = ShutdownHandle::new(&socket)?;
     }
     emit(Level::Info, "host_connected", &[("address", address)]);
+    // No WindowDeck message is exchanged before both devices authenticate.
+    let mut stream = pairing::secure_session(target, socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     write_message(
         &mut stream,
@@ -399,13 +464,14 @@ fn receive_h264_test(
     address: &Target,
     fullscreen: bool,
     baseline: bool,
+    ui: &mut Ui,
 ) -> Result<(), Box<dyn Error>> {
-    let (stream, session_id, ..) = connect(address, VideoCodec::H264)?;
+    let (stream, session_id, ..) = connect_paired(address, VideoCodec::H264, ui)?;
     play_legacy(stream, session_id, address, fullscreen, baseline)
 }
 
 fn play_legacy(
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     address: &Target,
     fullscreen: bool,
@@ -425,7 +491,7 @@ fn play_legacy(
         &[("buffering", if baseline { "baseline" } else { "reduced" })],
     );
     let input = player.stdin.take().ok_or("ffplay no abrió su entrada")?;
-    let shutdown = Arc::new(Mutex::new(stream.try_clone()?));
+    let shutdown = Arc::new(Mutex::new(stream.shutdown_handle()?));
     let stopping = Arc::new(AtomicBool::new(false));
     let worker_stopping = Arc::clone(&stopping);
     let worker_shutdown = Arc::clone(&shutdown);
@@ -497,12 +563,12 @@ fn transport_error(error: &(dyn Error + 'static)) -> bool {
 }
 
 fn reconnect_h264(
-    mut stream: TcpStream,
+    mut stream: SecureStream,
     mut session_id: u64,
     address: &Target,
     mut input: impl Write,
     stopping: &AtomicBool,
-    shutdown: &Mutex<TcpStream>,
+    shutdown: &Mutex<ShutdownHandle>,
 ) -> io::Result<()> {
     let mut retry = connection::RetryBackoff::default();
     loop {
@@ -558,7 +624,7 @@ fn reconnect_h264(
                     if stopping.load(Ordering::Relaxed) {
                         return Ok(());
                     }
-                    *watched = next.try_clone()?;
+                    *watched = next.shutdown_handle()?;
                     stream = next;
                     session_id = id;
                     emit(
@@ -700,12 +766,13 @@ enum ClientEvent {
     FrameReady,
     Disconnected(String),
     Failed(String),
-    Reconnected(TcpStream),
+    Reconnected(ShutdownHandle),
     Stopped,
+    Pairing(pairing::Update),
 }
 
 fn receive_frames(
-    mut stream: TcpStream,
+    mut stream: SecureStream,
     mut session_id: u64,
     address: Target,
     latest: Arc<Mutex<Option<Frame>>>,
@@ -827,7 +894,7 @@ fn receive_frames(
                 }
                 match connect(&address, VideoCodec::Rgb332) {
                     Ok((new_stream, new_session_id, ..)) => {
-                        let Ok(shutdown) = new_stream.try_clone() else {
+                        let Ok(shutdown) = new_stream.shutdown_handle() else {
                             continue;
                         };
                         if proxy
@@ -839,6 +906,11 @@ fn receive_frames(
                         stream = new_stream;
                         session_id = new_session_id;
                         continue 'sessions;
+                    }
+                    Err(error) if pairing::needs_pairing(error.as_ref()) => {
+                        // Pairing needs a person: reopen the client instead of retrying.
+                        let _ = proxy.send_event(ClientEvent::Failed(error.to_string()));
+                        return;
                     }
                     Err(error) => emit(
                         Level::Warn,
@@ -857,7 +929,7 @@ struct App {
     latest: Arc<Mutex<Option<Frame>>>,
     frame: Option<Frame>,
     stopping: Arc<AtomicBool>,
-    shutdown: TcpStream,
+    shutdown: ShutdownHandle,
     worker: Option<JoinHandle<()>>,
     initial_size: (u16, u16),
     start_fullscreen: bool,
@@ -1005,6 +1077,8 @@ impl ApplicationHandler<ClientEvent> for App {
                 emit(Level::Info, "session_stopped", &[]);
                 event_loop.exit();
             }
+            // A pairing window may leave its last update queued.
+            ClientEvent::Pairing(_) => {}
         }
     }
 
@@ -1108,16 +1182,61 @@ fn color(value: u8) -> u32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn h264_reconnects_with_new_session_and_resets_chunk_sequence() {
+    use windowdeck_transport::pairing::{Outcome, Prompt, Request};
+    use windowdeck_transport::secure::{self, Control, Incoming};
+    use windowdeck_transport::{Identity, Intent, Role, Trust};
+
+    struct TemporaryDir(std::path::PathBuf);
+
+    impl Drop for TemporaryDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A listening fake host, its identity and a target that already trusts it
+    /// (unless `trusted` is false).
+    fn fake_host(trusted: bool) -> (std::net::TcpListener, Identity, Target, TemporaryDir) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "windowdeck-client-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let host = Trust::open(root.join("host"), Role::Host).unwrap();
+        let client = Trust::open(root.join("client"), Role::Client).unwrap();
+        let identity = host.identity().unwrap();
+        if trusted {
+            client.add(identity.public(), "PC de prueba").unwrap();
+        }
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let client = TcpStream::connect(&address).unwrap();
-        client
+        let target = Target::new(
+            &listener.local_addr().unwrap().to_string(),
+            Arc::new(ClientSecurity::open(client).unwrap()),
+        );
+        (listener, identity, target, TemporaryDir(root))
+    }
+
+    /// Accepts one encrypted session without checking the client's key.
+    fn admit(listener: &std::net::TcpListener, identity: &Identity) -> SecureStream {
+        let (socket, _) = listener.accept().unwrap();
+        let Ok(Incoming::Secure(accepted)) = secure::accept(socket, identity, "PC de prueba")
+        else {
+            panic!("encrypted client expected");
+        };
+        let mut stream = accepted.stream;
+        stream.send_control(&Control::Accepted).unwrap();
+        stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
+        stream
+    }
+
+    #[test]
+    fn h264_reconnects_with_new_session_and_resets_chunk_sequence() {
+        let (listener, identity, target, _dir) = fake_host(true);
         let server = thread::spawn(move || {
-            let (mut first, _) = listener.accept().unwrap();
+            let mut first = admit(&listener, &identity);
             let packet = |id, value| Message::VideoChunk {
                 session_id: id,
                 frame_number: 0,
@@ -1129,10 +1248,7 @@ mod tests {
             };
             write_message(&mut first, &packet(10, 1)).unwrap();
             drop(first); // EOF without Stop is a transport failure.
-            let (mut second, _) = listener.accept().unwrap();
-            second
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            let mut second = admit(&listener, &identity);
             assert!(matches!(
                 read_message(&mut second).unwrap(),
                 Message::Hello { .. }
@@ -1163,12 +1279,17 @@ mod tests {
             write_message(&mut second, &packet(20, 2)).unwrap();
             write_message(&mut second, &Message::Stop).unwrap();
         });
-        let shutdown = Mutex::new(client.try_clone().unwrap());
+        let socket = TcpStream::connect(&target.address).unwrap();
+        let client = pairing::secure_session(&target, socket).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let shutdown = Mutex::new(client.shutdown_handle().unwrap());
         let mut output = Vec::new();
         reconnect_h264(
             client,
             10,
-            &Target::from(address.as_str()),
+            &target,
             &mut output,
             &AtomicBool::new(false),
             &shutdown,
@@ -1180,23 +1301,19 @@ mod tests {
 
     #[test]
     fn closing_player_during_reconnect_wait_prevents_new_connection() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let client = TcpStream::connect(&address).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        drop(server);
+        let (listener, identity, target, _dir) = fake_host(true);
+        let server = thread::spawn(move || {
+            drop(admit(&listener, &identity));
+            listener
+        });
+        let socket = TcpStream::connect(&target.address).unwrap();
+        let client = pairing::secure_session(&target, socket).unwrap();
+        let listener = server.join().unwrap();
         let stopping = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&stopping);
-        let shutdown = Mutex::new(client.try_clone().unwrap());
+        let shutdown = Mutex::new(client.shutdown_handle().unwrap());
         let worker = thread::spawn(move || {
-            reconnect_h264(
-                client,
-                1,
-                &Target::from(address.as_str()),
-                Vec::new(),
-                &cancel,
-                &shutdown,
-            )
+            reconnect_h264(client, 1, &target, Vec::new(), &cancel, &shutdown)
         });
         thread::sleep(Duration::from_millis(100));
         stopping.store(true, Ordering::Relaxed);
@@ -1206,6 +1323,71 @@ mod tests {
             listener.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn an_unknown_host_requires_pairing_before_any_protocol_message() {
+        let (listener, identity, target, _dir) = fake_host(false);
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            // The client leaves after learning the host key: no Hello, no intent.
+            secure::accept(socket, &identity, "PC").is_err()
+        });
+        let error = connect(&target, VideoCodec::H264Frames).unwrap_err();
+        assert!(pairing::needs_pairing(error.as_ref()), "{error}");
+        assert!(!transport_error(error.as_ref()), "pairing is never retried");
+        assert!(server.join().unwrap());
+    }
+
+    struct Answer(bool);
+
+    impl Prompt for Answer {
+        fn show(&mut self, _: &Request) -> io::Result<()> {
+            Ok(())
+        }
+        fn decision(&mut self) -> io::Result<Option<bool>> {
+            Ok(Some(self.0))
+        }
+    }
+
+    #[test]
+    fn pairing_stores_the_host_only_when_both_people_accept() {
+        for host_accepts in [true, false] {
+            let (listener, identity, target, _dir) = fake_host(false);
+            let host_key = identity.public();
+            let server = thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                let Ok(Incoming::Secure(accepted)) = secure::accept(socket, &identity, "PC") else {
+                    panic!("encrypted client expected");
+                };
+                let mut accepted = *accepted;
+                assert_eq!(accepted.intent, Intent::Pair);
+                assert!(!accepted.knows_host);
+                accepted
+                    .stream
+                    .send_control(&Control::PairingRequired)
+                    .unwrap();
+                windowdeck_transport::pairing::pair_as_host(
+                    &mut accepted.stream,
+                    &accepted.transcript,
+                    &accepted.peer,
+                    &mut Answer(host_accepts),
+                    Duration::from_secs(5),
+                )
+                .unwrap()
+            });
+            let outcome =
+                pairing::pair_with(&target, VideoCodec::H264Frames, &mut Answer(true)).unwrap();
+            let host_outcome = server.join().unwrap();
+            let stored = target.security.trust.is_paired(&host_key).unwrap();
+            if host_accepts {
+                assert_eq!((outcome, host_outcome), (Outcome::Paired, Outcome::Paired));
+                assert!(stored);
+            } else {
+                assert_eq!(outcome, Outcome::RejectedByPeer);
+                assert!(!stored);
+            }
+        }
     }
 
     #[test]
@@ -1336,13 +1518,9 @@ mod tests {
     #[test]
     fn native_handshake_rejects_modes_outside_the_advertised_bounds() {
         for (width, height) in [(1920, 1080), (1281, 800), (0, 800)] {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap().to_string();
+            let (listener, identity, target, _dir) = fake_host(true);
             let server = thread::spawn(move || {
-                let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(3)))
-                    .unwrap();
+                let mut socket = admit(&listener, &identity);
                 read_message(&mut socket).unwrap();
                 write_message(
                     &mut socket,
@@ -1371,7 +1549,7 @@ mod tests {
                 )
                 .unwrap();
             });
-            let result = connect(&Target::from(address.as_str()), VideoCodec::H264Frames);
+            let result = connect(&target, VideoCodec::H264Frames);
             assert!(
                 result
                     .unwrap_err()

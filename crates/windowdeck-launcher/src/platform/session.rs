@@ -4,7 +4,10 @@ use super::{
     error, identifier, log_root,
     process::{OwnedProcess, POLL},
 };
-use crate::{cli::SessionMode, model::State};
+use crate::{
+    cli::SessionMode,
+    model::{self, HostLine, State},
+};
 use std::{
     fs::{self, File},
     io::{self, Read},
@@ -21,6 +24,7 @@ use std::{
 pub enum Event {
     Session(PathBuf),
     State(State),
+    Pairing(HostLine),
     Finished(Result<(), String>),
 }
 
@@ -87,7 +91,8 @@ fn run(mode: SessionMode, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> i
         let mut command = layout.command(&layout.host)?;
         command
             .args([mode.host_arg(), "0.0.0.0:48150"])
-            .env("WINDOWDECK_STOP_FILE", &stop);
+            .env("WINDOWDECK_STOP_FILE", &stop)
+            .env("WINDOWDECK_PAIRING_FILE", model::pairing_file(&session));
         if mode != SessionMode::Mirror {
             command.env("WINDOWDECK_DISPLAY_EXE", &layout.display);
         }
@@ -112,9 +117,14 @@ fn run(mode: SessionMode, cancel: &Arc<AtomicBool>, events: &Sender<Event>) -> i
             }
             let mut chunk = [0; 4096];
             let count = output.read(&mut chunk)?;
-            for state in tail.push(&chunk[..count]) {
-                seen_state = true;
-                let _ = events.send(Event::State(state));
+            for line in tail.push(&chunk[..count]) {
+                let _ = events.send(match line {
+                    HostLine::State(state) => {
+                        seen_state = true;
+                        Event::State(state)
+                    }
+                    other => Event::Pairing(other),
+                });
             }
             if !seen_state && started.elapsed() > Duration::from_secs(15) {
                 return Err(error("El host no confirmó su arranque. Consulta host.log."));
@@ -199,15 +209,15 @@ struct StateTail {
 }
 
 impl StateTail {
-    fn push(&mut self, bytes: &[u8]) -> Vec<State> {
-        let mut states = Vec::new();
+    fn push(&mut self, bytes: &[u8]) -> Vec<HostLine> {
+        let mut lines = Vec::new();
         for &byte in bytes {
             if byte == b'\n' {
                 if !self.overlong
                     && let Ok(line) = std::str::from_utf8(&self.line)
-                    && let Some(state) = State::from_host(line)
+                    && let Some(parsed) = HostLine::parse(line)
                 {
-                    states.push(state);
+                    lines.push(parsed);
                 }
                 self.line.clear();
                 self.overlong = false;
@@ -217,7 +227,7 @@ impl StateTail {
                 self.overlong = true;
             }
         }
-        states
+        lines
     }
 }
 
@@ -235,15 +245,23 @@ mod tests {
     fn partial_stdout_records_are_preserved_and_oversized_lines_ignored() {
         let mut tail = StateTail::default();
         assert!(tail.push(b"windowdeck_state=stream").is_empty());
-        assert_eq!(tail.push(b"ing\r\n"), vec![State::Streaming]);
+        assert_eq!(
+            tail.push(b"ing\r\n"),
+            vec![HostLine::State(State::Streaming)]
+        );
         assert!(tail.push(&vec![b'x'; 8192]).is_empty());
         assert_eq!(
             tail.push(b"\nwindowdeck_state=listening\n"),
-            vec![State::Listening]
+            vec![HostLine::State(State::Listening)]
         );
         assert_eq!(
             tail.push(b"noise\nwindowdeck_state=negotiating\n"),
-            vec![State::Negotiating]
+            vec![HostLine::State(State::Negotiating)]
         );
+        assert!(matches!(
+            tail.push(b"windowdeck_pairing_result=a1b2c3d4e5f6 paired\n")
+                .as_slice(),
+            [HostLine::PairingResult { .. }]
+        ));
     }
 }

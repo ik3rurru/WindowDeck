@@ -3,6 +3,8 @@
 Requires an unlocked desktop and the bundled FFmpeg in PATH. Captures the actual
 primary screen over loopback only; video stays in memory and is never saved.
 Does not start a display broker, modify the firewall or change display topology.
+The host only accepts paired, encrypted clients: this unencrypted test client
+reaches it through secure_relay with both ends paired in temporary stores.
 """
 import argparse
 import json
@@ -13,6 +15,8 @@ import struct
 import subprocess
 import tempfile
 import time
+
+from windowdeck_relay import PairedDevices, stop
 
 VERSION = 3
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -112,27 +116,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
     parser.add_argument("--ffprobe", default="ffprobe")
+    parser.add_argument("--relay", required=True, help="secure_relay example binary")
     args = parser.parse_args()
     assert os.name == "nt", "requires Windows graphics capture"
     host_path = str(Path(args.host).resolve())
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
-        address = reservation.getsockname()
-    with tempfile.TemporaryDirectory(prefix="windowdeck-mirror-") as temp:
+        host_address = reservation.getsockname()
+    with tempfile.TemporaryDirectory(prefix="windowdeck-mirror-") as temp, PairedDevices(args.relay) as devices:
         folder = Path(temp)
-        stop = folder / "stop"
-        env = dict(os.environ, WINDOWDECK_STOP_FILE=str(stop),
+        stop_file = folder / "stop"
+        env = dict(os.environ, WINDOWDECK_STOP_FILE=str(stop_file),
                    WINDOWDECK_DISPLAY_EXE=str(folder / "no-display-helper.exe"),
-                   WINDOWDECK_H264_ENCODER="libx264")
+                   WINDOWDECK_H264_ENCODER="libx264",
+                   WINDOWDECK_DATA_DIR=str(devices.host_dir))
+        env.pop("WINDOWDECK_PAIRING_FILE", None)
         with (folder / "host.out").open("wb") as output, (folder / "host.log").open("wb") as log:
-            host = subprocess.Popen([host_path, "--mirror", f"{address[0]}:{address[1]}"],
-                                    env=env, stdout=output, stderr=log, **HIDDEN)
+            host = subprocess.Popen([host_path, "--mirror", f"{host_address[0]}:{host_address[1]}"],
+                                    env=env, stdout=output, stderr=log, stdin=subprocess.DEVNULL, **HIDDEN)
+            relay = None
             try:
                 deadline = time.monotonic() + 10
                 while "windowdeck_state=listening" not in (folder / "host.out").read_text():
                     assert host.poll() is None, "host failed to start"
                     assert time.monotonic() < deadline, "host startup timed out"
                     time.sleep(.05)
+                relay, relay_address = devices.relay_process("client", f"{host_address[0]}:{host_address[1]}")
+                address = relay_address.rsplit(":", 1)
+                address = (address[0], int(address[1]))
                 cases = ((False, (1280, 800)), (True, (65535, 65535)),
                          (False, (1920, 1080)), (False, (2560, 1440)), (False, (1280, 800)))
                 for attempt, (legacy, bounds) in enumerate(cases):
@@ -140,7 +151,7 @@ def main():
                         session, video_size = handshake(sock, legacy, bounds)
                         encoded = receive(sock, session, 12 if attempt == 0 else 2)
                         if attempt == len(cases) - 1:
-                            stop.touch()
+                            stop_file.touch()
                             deadline = time.monotonic() + 5
                             while True:
                                 try:
@@ -158,6 +169,7 @@ def main():
                 assert states.count("windowdeck_state=streaming") == len(cases), states
                 assert "windowdeck_state=stopped" in states, states
                 assert logs.count("event=mirror_capture_selected") == len(cases), logs
+                assert logs.count("event=client_authenticated") == len(cases), logs
                 assert logs.count('scale_filter="bicubic"') == len(cases), logs
                 for forbidden in ("event=driver_capture_selected", "event=virtual_capture_selected",
                                   "encoder_stalled", "monitor_removed_or_changed", "connection_unstable"):
@@ -167,7 +179,9 @@ def main():
                 print((folder / "host.log").read_text(encoding="utf-8", errors="replace"))
                 raise
             finally:
-                stop.touch()
+                if relay:
+                    stop(relay)
+                stop_file.touch()
                 try:
                     host.wait(timeout=12)
                 except subprocess.TimeoutExpired:

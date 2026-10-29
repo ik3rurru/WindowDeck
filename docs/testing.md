@@ -1,5 +1,49 @@
 # Pruebas y mediciones
 
+## Emparejamiento y conexión cifrada — 29 de octubre de 2026
+
+Implementado el bloque 4 de la consolidación: canal Noise XX, emparejamiento por
+código con compromiso, almacenes de claves, revocación y rechazo de versiones
+anteriores. Diseño en [ADR 0022](adr/0022-pairing-and-encryption.md). Todas las
+pruebas de esta sección se ejecutaron en un contenedor Linux x86_64; no hubo
+Windows, driver, panel real ni Steam Deck.
+
+- Formato y Clippy con `-D warnings` correctos en Linux (base y `native-media`)
+  y en compilación cruzada para `x86_64-pc-windows-msvc` sin `native-media`,
+  incluidas las pruebas exclusivas de Windows y el panel. No se han ejecutado
+  en Windows: lo hará CI.
+- `cargo test --workspace`: 92 superadas y 3 ignoradas, igual con todas las
+  funciones. Ignoradas: descubrimiento multicast, la regresión que requiere
+  FFmpeg en PATH (superada al ejecutarla explícitamente) y la medición de rendimiento.
+- Arnés del cliente integrado con FFmpeg 6.1 y SDL 2.30 del sistema, a través
+  de `secure_relay`: superadas las tres variantes de CI (actual, handshake
+  antiguo y alta resolución). `--media-self-test` correcto.
+- Host real `diag pattern` en Linux: sesión cifrada con vídeo sintético;
+  rechazo de cliente no emparejado y de cliente 0.3.x (Error 3 y estado
+  `legacy_client`); sin panel ni terminal no se empareja; emparejamiento
+  aprobado mediante el archivo del panel; `devices remove` revoca con el host en
+  marcha; tres rechazos bloquean la cuarta solicitud.
+- Medición del canal en loopback, release: 6653 Mbit/s con 4000 mensajes de
+  60 kB, cifrado y descifrado incluidos (Xeon 2,1 GHz, cuatro núcleos). No es
+  una medición en la Deck ni incluye red.
+- Servidor X virtual (Xvfb, sin gestor de ventanas), host y cliente reales,
+  respuesta del panel escrita en su archivo: la ventana de la Deck muestra
+  código, nombre y huella del PC; el clic en «Coincide» pasa a «Confirma el
+  código en el PC»; tras aceptar, se abre la sesión con vídeo. Rechazar en el
+  PC muestra «El PC rechazó el emparejamiento» con el botón Cerrar. Con
+  `--native` y SDL se cierra el reproductor, se empareja y se vuelve a abrir;
+  la ruta sintética no ofrece H.264, así que esa variante no llegó al vídeo.
+- Esta prueba encontró un fallo, ya corregido: después de la ventana de
+  emparejamiento, `run_app` heredaba la salida pedida por esa ventana y la
+  ventana de vídeo RGB332 se cerraba al instante. Ahora todas las ventanas usan
+  `run_app_on_demand`, que la limpia. Comparado con el binario de `HEAD` en el
+  mismo entorno.
+
+Pendiente: aviso y revocación en el panel de Windows (incluido DPI), ventana de
+emparejamiento en la Deck en modo escritorio y modo juego, coste del cifrado en
+la Deck, `test-mirror-host.py` en Windows (actualizado para `secure_relay`,
+sin ejecutar) y la sesión completa PC–Deck emparejada.
+
 ## Publicación 0.3.1 — 30 de septiembre de 2026
 
 Release preliminar `v0.3.1`, fuentes `e5b8de9`. Formato, pruebas del workspace

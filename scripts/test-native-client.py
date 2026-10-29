@@ -1,6 +1,8 @@
 """Headless native client integration: fragmented video, lost connection, restart, Stop.
 
 Uses generated pixels only. No monitor, broker, desktop capture or LAN required.
+The client only speaks the encrypted transport: this unencrypted test host is
+reached through secure_relay, with both ends paired in temporary stores.
 """
 import argparse
 import os
@@ -10,6 +12,8 @@ import struct
 import subprocess
 import threading
 import time
+
+from windowdeck_relay import PairedDevices, stop
 
 VERSION = 3
 
@@ -71,17 +75,20 @@ def send_frame(sock, session, number, payload, partial=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--client", required=True)
+    parser.add_argument("--relay", required=True, help="secure_relay example binary")
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--legacy-handshake", action="store_true")
     parser.add_argument("--high-resolution", action="store_true")
     args = parser.parse_args()
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    devices = PairedDevices(args.relay)
+    client_env = dict(os.environ, WINDOWDECK_DATA_DIR=str(devices.client_dir))
     # A renderer startup failure must happen before the host can activate a display.
     with socket.socket() as unopened:
         unopened.bind(("127.0.0.1", 0))
         unopened.listen()
         unopened.settimeout(.2)
-        env = dict(os.environ, SDL_VIDEODRIVER="windowdeck_invalid_driver")
+        env = dict(client_env, SDL_VIDEODRIVER="windowdeck_invalid_driver")
         failed = subprocess.run([args.client, f"127.0.0.1:{unopened.getsockname()[1]}", "--native"],
                                 env=env, capture_output=True, text=True, timeout=10, **hidden)
         assert failed.returncode != 0, failed.stderr
@@ -130,11 +137,16 @@ def main():
 
         server = threading.Thread(target=serve, daemon=True)
         server.start()
-        env = dict(os.environ, SDL_VIDEODRIVER="dummy")
-        quality = ["--quality", "1440p"] if args.high_resolution else []
-        result = subprocess.run([args.client, f"127.0.0.1:{listener.getsockname()[1]}", "--native", *quality],
-                                env=env, capture_output=True, text=True, timeout=25, **hidden)
-        server.join(timeout=2)
+        relay, relay_address = devices.relay_process("host", f"127.0.0.1:{listener.getsockname()[1]}")
+        try:
+            env = dict(client_env, SDL_VIDEODRIVER="dummy")
+            quality = ["--quality", "1440p"] if args.high_resolution else []
+            result = subprocess.run([args.client, relay_address, "--native", *quality],
+                                    env=env, capture_output=True, text=True, timeout=25, **hidden)
+            server.join(timeout=2)
+        finally:
+            stop(relay)
+            devices.close()
     assert not failures, failures
     assert not server.is_alive(), "test server did not finish"
     assert result.returncode == 0, result.stderr
@@ -144,9 +156,10 @@ def main():
     for width, height in sizes:
         assert f"native_video size={width}x{height}" in result.stderr, result.stderr
     assert result.stderr.index("native_renderer name=") < result.stderr.index("event=host_connected"), result.stderr
+    assert result.stderr.count("event=host_authenticated") == 2, result.stderr
     if not args.legacy_handshake:
         assert result.stderr.count("event=connection_validation_started") == 2, result.stderr
-    print(f"PASS: {sizes}: startup failure without connection, player readiness, validation/legacy handshake, native decoding, partial-frame disconnect, reconnect at a new resolution and Stop")
+    print(f"PASS: {sizes}: startup failure without connection, player readiness, encrypted session, validation/legacy handshake, native decoding, partial-frame disconnect, reconnect at a new resolution and Stop")
 
 
 if __name__ == "__main__":

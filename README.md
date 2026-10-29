@@ -31,7 +31,9 @@ no lo instala. Duplicar no requiere instalarlo.
    pulsa **Iniciar** y acepta el permiso. En duplicación se utiliza únicamente
    para preparar las reglas de red.
 2. Abre **WindowDeck** en el modo escritorio de la Steam Deck. El descubrimiento
-   automático localiza el PC; si encuentra varios, permite elegirlo.
+   automático localiza el PC; si encuentra varios, permite elegirlo. La primera
+   vez, la Deck y el panel de Windows muestran el mismo código de seis cifras:
+   comprueba que coincide y confírmalo en ambos. Después se conectan sin preguntar.
 3. En extensión, mueve una ventana al escritorio de la Deck. En duplicación,
    verás la pantalla principal del PC conservando su proporción. El cliente
    actualizado elige automáticamente según su pantalla, hasta 2560 × 1440;
@@ -43,8 +45,8 @@ no lo instala. Duplicar no requiere instalarlo.
 El panel muestra el estado de conexión y permite abrir los registros. El host
 se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
-El host negocia vídeo con el reproductor integrado; los clientes anteriores
-siguen siendo compatibles mediante MPEG-TS. En la Deck, extrae el paquete
+El host negocia vídeo con el reproductor integrado; `--ffplay` sigue disponible
+como reproductor de respaldo mediante MPEG-TS. En la Deck, extrae el paquete
 `WindowDeck-0.3.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
@@ -69,7 +71,7 @@ flatpak run io.github.ik3rurru.WindowDeck --fullscreen
 
 Si mDNS no está disponible, admite una dirección manual:
 `flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --native --fullscreen`.
-El cliente anterior utiliza `--h264-test` en lugar de `--native`.
+La primera conexión a un PC muestra el código de emparejamiento.
 Cerrar la X cancela la reconexión; F11 alterna pantalla completa y Escape vuelve
 al modo ventana. El panel de Windows y la gestión de sus procesos están en Rust.
 El acceso directo de Windows se crea con `scripts/install-shortcut.ps1`.
@@ -82,16 +84,35 @@ Detalles y límites en [calidad de imagen](docs/upscaling-quality.md).
 
 ## Seguridad actual
 
-El protocolo TCP todavía **no autentica dispositivos ni cifra el vídeo o el
-control**. El descubrimiento mDNS identifica servicios, no acredita su identidad.
-Utiliza el prototipo únicamente en una red local de confianza.
+La release 0.3.1 todavía transmite **sin cifrar ni autenticar**: úsala solo en
+una LAN de confianza. Lo que sigue describe el código actual, pendiente de
+publicar, que necesita actualizar a la vez el PC y la Deck.
 
-Existen mensajes versionados, límites de 64 KiB por mensaje, validación de
-fragmentos y límites de tiempo y de colas. El lanzador configura reglas de
-firewall para el host en redes privadas y desde la subred local. Estas medidas
-no sustituyen el emparejamiento ni el cifrado. Quedan pendientes autenticación,
-claves por dispositivo, revocación y completar la cobertura de entradas inválidas.
-La entrada remota de ratón, teclado y táctil aún no está implementada.
+Control y vídeo viajan **cifrados y autenticados** (Noise XX con X25519 y
+ChaCha20-Poly1305). Cada PC y cada Deck tienen una clave propia. El PC solo
+atiende a dispositivos emparejados y lo comprueba antes de negociar el vídeo,
+probar la red o activar la pantalla. La Deck solo pide vídeo a PC emparejados.
+
+Para emparejar, ambas pantallas muestran un código de seis cifras derivado de
+la conexión cifrada y las dos personas deben confirmarlo. Un atacante en la red
+que intente interponerse acierta el código con una probabilidad de 1 entre un
+millón por intento, y cada intento necesita la confirmación en las dos pantallas.
+La solicitud caduca a los dos minutos; tras tres intentos fallidos el PC deja de
+aceptar solicitudes hasta pulsar Detener e Iniciar.
+
+El panel lista los dispositivos emparejados y permite revocarlos con la sesión
+detenida; también `windowdeck-host devices`. En la Deck, `--paired-hosts` y
+`--forget-host`. Las claves se guardan en la carpeta de datos del usuario
+(`%LOCALAPPDATA%\WindowDeck\security` y, en la Deck, la del Flatpak).
+
+Límites: la clave privada no se cifra en reposo, así que un programa con acceso
+a tu cuenta puede leerla. mDNS sigue anunciando el PC y el ritmo del tráfico
+revela actividad. Los clientes y hosts 0.3.x no pueden conectarse con esta
+versión: actualiza ambos extremos. Hay mensajes versionados, límites de 64 KiB
+por mensaje, validación de fragmentos y de cada campo, límites de tiempo y de
+colas, y reglas de firewall limitadas a redes privadas y la subred local. La
+entrada remota de ratón, teclado y táctil aún no está implementada. Diseño y
+garantías en [ADR 0022](docs/adr/0022-pairing-and-encryption.md).
 
 ## Desarrollo y comprobaciones
 
@@ -120,6 +141,7 @@ las sesiones con la Deck.
 - [Roadmap original](WINDOWDECK_ROADMAP.md) y [consolidación](windowdeck-roadmap-consolidacion.md).
 - [Decisión de rutas soportadas](docs/adr/0016-supported-video-routes.md).
 - [Decisión de integración y distribución de FFmpeg](docs/adr/0017-media-packaging.md).
+- [Emparejamiento y conexión cifrada](docs/adr/0022-pairing-and-encryption.md).
 - [Estado para continuar el desarrollo](docs/continuation.md).
 
 ## Licencias

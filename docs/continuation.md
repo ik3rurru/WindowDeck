@@ -1,4 +1,27 @@
-# Punto de continuación — 30 de septiembre de 2026
+# Punto de continuación — 29 de octubre de 2026
+
+## Emparejamiento y conexión cifrada (bloque 4)
+
+A petición del usuario se empieza la seguridad, primer pendiente de la
+consolidación. Implementado en la rama `claude/determined-hamilton-o64gl8`, sin
+release: nuevo crate `windowdeck-transport` (Noise XX, emparejamiento por código
+de seis cifras con compromiso, identidad y dispositivos emparejados), admisión
+en el host antes de `Hello`, ventana de emparejamiento en el cliente, aviso y
+revocación en el panel, `windowdeck-host devices`, `--paired-hosts` y
+`--forget-host`. Diseño en [ADR 0022](adr/0022-pairing-and-encryption.md);
+evidencia en [testing.md](testing.md).
+
+Rompe la compatibilidad: los clientes y hosts 0.3.x no se conectan con esta
+versión. Hay que instalar ambos extremos juntos; la siguiente release debería
+ser 0.4.0 (el workspace sigue en 0.3.1). No se ha tocado el driver.
+
+Siguiente paso: probar en Windows y en la Deck. Iniciar desde el panel, abrir
+el cliente, comparar el código en ambas pantallas y aceptar; reabrir para ver
+que no vuelve a preguntar; revocar desde el panel y comprobar que pide de nuevo
+el código; probar con DPI 150/200 % y en modo juego. Ejecutar también
+`test-mirror-host.py` con `--relay`.
+
+## Punto anterior — 30 de septiembre de 2026
 
 ## Release 0.3.1
 

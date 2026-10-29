@@ -54,16 +54,18 @@ jobs:
       - run: cargo test --locked -p windowdeck-host --all-features cpu_encoder_output_decodes_after_fragmented_transport -- --ignored --nocapture
         timeout-minutes: 3
       - run: cargo run --locked -p windowdeck-client --features native-media -- --media-self-test
+      # The unencrypted Python test host reaches the client through this relay.
+      - run: cargo build --locked -p windowdeck-transport --example secure_relay
       - if: runner.os == 'Linux'
         run: |
-          python3 scripts/test-native-client.py --client target/debug/windowdeck-client
-          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --legacy-handshake
-          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --high-resolution
+          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --relay target/debug/examples/secure_relay
+          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --relay target/debug/examples/secure_relay --legacy-handshake
+          python3 scripts/test-native-client.py --client target/debug/windowdeck-client --relay target/debug/examples/secure_relay --high-resolution
       - if: runner.os == 'Windows'
         run: |
-          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe
-          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --legacy-handshake
-          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --high-resolution
+          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --relay target/debug/examples/secure_relay.exe
+          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --relay target/debug/examples/secure_relay.exe --legacy-handshake
+          python scripts/test-native-client.py --client target/debug/windowdeck-client.exe --relay target/debug/examples/secure_relay.exe --high-resolution
       - if: runner.os == 'Windows'
         shell: pwsh
         run: ./driver/windows-idd/build.ps1 -ControlOnly -Toolset v143 -SdkVersion 10.0

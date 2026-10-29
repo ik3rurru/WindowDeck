@@ -5,7 +5,7 @@ use windowdeck_protocol::video::{AccessUnit, Assembler};
 
 enum Event {
     Packet(u64, AccessUnit),
-    Connected(u64, TcpStream, u16, u16),
+    Connected(u64, ShutdownHandle, u16, u16),
     Lost,
     Stopped,
     Failed(String),
@@ -15,21 +15,21 @@ pub(super) fn run(
     mut target: Target,
     fullscreen: bool,
     quality: Quality,
+    ui: &mut Ui,
 ) -> Result<(), Box<dyn Error>> {
     // Initialize SDL, the renderer and decoder before acknowledging any host probe.
     // A local startup failure must not cause a virtual display to appear on the PC.
-    let mut player = windowdeck_media::Player::new(fullscreen)?;
-    target.video_bounds = quality.bounds(player.output_size()?);
-    emit(
-        Level::Info,
-        "native_quality",
-        &[
-            ("profile", &format!("{quality:?}")),
-            ("max_width", &target.video_bounds.0.to_string()),
-            ("max_height", &target.video_bounds.1.to_string()),
-        ],
-    );
-    let (stream, id, width, height, codec) = connect(&target, VideoCodec::H264Frames)?;
+    let mut player = open_player(&mut target, fullscreen, quality)?;
+    let (stream, id, width, height, codec) = match connect(&target, VideoCodec::H264Frames) {
+        Err(error) if pairing::needs_pairing(error.as_ref()) => {
+            // Pairing uses its own window: close the player and reopen it after.
+            drop(player);
+            pairing::pair_interactively(&target, VideoCodec::H264Frames, ui, error.as_ref())?;
+            player = open_player(&mut target, fullscreen, quality)?;
+            connect(&target, VideoCodec::H264Frames)?
+        }
+        result => result?,
+    };
     if codec == VideoCodec::H264 {
         drop(player);
         emit(
@@ -40,10 +40,10 @@ pub(super) fn run(
         return play_legacy(stream, id, &target, fullscreen, false);
     }
     player.configure(width, height)?;
-    let shutdown = Arc::new(Mutex::new(stream.try_clone()?));
+    let shutdown = Arc::new(Mutex::new(stream.shutdown_handle()?));
     // Keep recovery tied to the session whose queued packets are being decoded.
     // The shared shutdown socket may already belong to a newer handshake.
-    let mut session_socket = stream.try_clone()?;
+    let mut session_socket = stream.shutdown_handle()?;
     let mut receiving_session = id;
     let mut discarded_session = None;
     let stopping = Arc::new(AtomicBool::new(false));
@@ -153,13 +153,32 @@ pub(super) fn run(
     result
 }
 
+fn open_player(
+    target: &mut Target,
+    fullscreen: bool,
+    quality: Quality,
+) -> Result<windowdeck_media::Player, Box<dyn Error>> {
+    let mut player = windowdeck_media::Player::new(fullscreen)?;
+    target.video_bounds = quality.bounds(player.output_size()?);
+    emit(
+        Level::Info,
+        "native_quality",
+        &[
+            ("profile", &format!("{quality:?}")),
+            ("max_width", &target.video_bounds.0.to_string()),
+            ("max_height", &target.video_bounds.1.to_string()),
+        ],
+    );
+    Ok(player)
+}
+
 fn receive(
-    mut stream: TcpStream,
+    mut stream: SecureStream,
     mut session: u64,
     target: &Target,
     output: &mpsc::SyncSender<queue::Queued<Event>>,
     stopping: &AtomicBool,
-    shutdown: &Mutex<TcpStream>,
+    shutdown: &Mutex<ShutdownHandle>,
 ) -> io::Result<()> {
     let mut retry = connection::RetryBackoff::default();
     loop {
@@ -230,13 +249,13 @@ fn receive(
                     if stopping.load(Ordering::Relaxed) {
                         return Ok(());
                     }
-                    *watched = next.try_clone()?;
+                    *watched = next.shutdown_handle()?;
                     drop(watched);
                     stream = next;
                     session = id;
                     queue::send_with_timeout(
                         output,
-                        Event::Connected(id, stream.try_clone()?, width, height),
+                        Event::Connected(id, stream.shutdown_handle()?, width, height),
                         queue::STALL_TIMEOUT,
                     )?;
                     emit(

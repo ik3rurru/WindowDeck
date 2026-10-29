@@ -11,6 +11,7 @@ font8x8 = "0.3"
 softbuffer = "0.4.8"
 windowdeck-diagnostics = { path = "../windowdeck-diagnostics" }
 windowdeck-protocol = { path = "../windowdeck-protocol" }
+windowdeck-transport = { path = "../windowdeck-transport" }
 winit = "0.30.13"
 
 [lints]
