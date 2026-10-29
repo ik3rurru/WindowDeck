@@ -1,10 +1,10 @@
 use super::*;
-use font8x8::UnicodeFonts;
+use crate::canvas::{self, Canvas};
 use windowdeck_protocol::discovery::{Browser, Host};
 use winit::event::{MouseButton, TouchPhase};
 
-pub fn choose(browser: &mut Browser) -> Result<Option<Host>, Box<dyn Error>> {
-    let event_loop = EventLoop::new()?;
+pub fn choose(browser: &mut Browser, ui: &mut Ui) -> Result<Option<Host>, Box<dyn Error>> {
+    let event_loop = ui.event_loop()?;
     let context = Context::new(event_loop.owned_display_handle())?;
     let mut picker = Picker {
         context,
@@ -15,7 +15,7 @@ pub fn choose(browser: &mut Browser) -> Result<Option<Host>, Box<dyn Error>> {
         selected: None,
         cursor_y: 0.0,
     };
-    event_loop.run_app(&mut picker)?;
+    event_loop.run_app_on_demand(&mut picker)?;
     Ok(picker.selected)
 }
 struct Picker<'a> {
@@ -46,35 +46,9 @@ impl Picker<'_> {
         let surface = self.surface.as_mut().ok_or("No hay superficie")?;
         surface.resize(w, h)?;
         let mut pixels = surface.buffer_mut()?;
-        pixels.fill(0x18202c);
-        let mut text = |value: &str, y: usize| {
-            for (i, c) in value
-                .chars()
-                .take(size.width.saturating_sub(40) as usize / 16)
-                .enumerate()
-            {
-                let glyph = font8x8::BASIC_FONTS
-                    .get(c)
-                    .or_else(|| font8x8::BASIC_FONTS.get('?'))
-                    .unwrap();
-                for (row, bits) in glyph.iter().enumerate() {
-                    for col in 0..8 {
-                        if bits & (1 << col) == 0 {
-                            continue;
-                        }
-                        for dy in 0..2 {
-                            for dx in 0..2 {
-                                let x = 20 + i * 16 + col * 2 + dx;
-                                let py = y + row * 2 + dy;
-                                if x < size.width as usize && py < size.height as usize {
-                                    pixels[py * size.width as usize + x] = 0xffffff;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        };
+        pixels.fill(canvas::BACKGROUND);
+        let mut canvas = Canvas::new(&mut pixels, size.width as usize, size.height as usize);
+        let mut text = |value: &str, y: usize| canvas.text(20, y, 2, canvas::WHITE, value);
         if self.hosts.is_empty() {
             text("Buscando equipos en la red...", 24);
             text("Pulsa Iniciar en Windows.", 64);
@@ -89,7 +63,7 @@ impl Picker<'_> {
         Ok(())
     }
 }
-impl ApplicationHandler for Picker<'_> {
+impl ApplicationHandler<ClientEvent> for Picker<'_> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let hosts = self.browser.snapshot();
         if hosts.len() == 1 && self.hosts.is_empty() {

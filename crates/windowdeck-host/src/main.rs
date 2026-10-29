@@ -1,18 +1,20 @@
 use std::env;
 use std::error::Error;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{
     ConnectionEvent, ConnectionState, Message, VideoCodec, connection, read_message, write_message,
 };
+use windowdeck_transport::SecureStream;
 
 #[cfg(any(windows, test))]
 mod annex_b;
 #[cfg(windows)]
 mod capture;
 mod cli;
+mod security;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 const DEFAULT_ADDRESS: &str = "0.0.0.0:48150";
@@ -60,6 +62,9 @@ fn run() -> Result<(), AnyError> {
         );
         return Ok(());
     }
+    if let Mode::Devices(command) = &mode {
+        return security::devices(command);
+    }
     if mode == Mode::Version {
         println!(
             "windowdeck-host {} protocol={} profile={}",
@@ -102,7 +107,7 @@ fn run() -> Result<(), AnyError> {
         Mode::DriverFrameTest => driver_frame_test(false),
         Mode::GpuFrameTest => driver_frame_test(true),
         Mode::GpuEncodeTest(encoder) => gpu_encode_test(&encoder),
-        Mode::Help | Mode::DiagHelp | Mode::Version => unreachable!(),
+        Mode::Help | Mode::DiagHelp | Mode::Version | Mode::Devices(_) => unreachable!(),
     }
 }
 
@@ -121,6 +126,14 @@ enum Mode {
     DriverFrameTest,
     GpuFrameTest,
     GpuEncodeTest(String),
+    Devices(DevicesCommand),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DevicesCommand {
+    List,
+    Remove(String),
+    Clear,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,6 +207,9 @@ fn run_server(
     if monitor.is_some() {
         return Err("la captura de pantalla solo está disponible en Windows".into());
     }
+    // Load the identity first: a damaged trust store must stop the host before
+    // it listens or announces itself.
+    let mut security = security::Security::load()?;
     let listener = TcpListener::bind(&address)?;
     let _announcement = match windowdeck_protocol::discovery::advertise(
         listener.local_addr()?,
@@ -213,7 +229,11 @@ fn run_server(
             None
         }
     };
-    emit(Level::Info, "host_listening", &[("address", &address)]);
+    emit(
+        Level::Info,
+        "host_listening",
+        &[("address", &listener.local_addr()?.to_string())],
+    );
     publish_state("listening");
 
     listener.set_nonblocking(true)?;
@@ -232,11 +252,23 @@ fn run_server(
             Err(error) => return Err(error.into()),
         };
         stream.set_nonblocking(false)?;
-        publish_state("negotiating");
         emit(
             Level::Info,
             "client_connected",
             &[("peer", &peer.to_string())],
+        );
+        // Unpaired, legacy and pairing connections end here without a session.
+        let security::Admission::Session(stream, client) = security.admit(stream) else {
+            continue;
+        };
+        publish_state("negotiating");
+        emit(
+            Level::Info,
+            "session_client",
+            &[
+                ("name", &client.name),
+                ("fingerprint", &client.key.fingerprint()),
+            ],
         );
         let result = serve(stream, monitor, codec, &mut health);
         if let Err(error) = &result {
@@ -275,7 +307,7 @@ fn run_server(
 }
 
 fn serve(
-    mut stream: TcpStream,
+    mut stream: SecureStream,
     mut monitor: Option<CaptureTarget>,
     mut codec: VideoCodec,
     health: &mut SessionHealth,
@@ -488,7 +520,7 @@ impl SessionHealth {
 
 #[cfg(windows)]
 fn capture_stream(
-    stream: TcpStream,
+    stream: SecureStream,
     target: CaptureTarget,
     session_id: u64,
     codec: VideoCodec,
@@ -531,7 +563,7 @@ fn capture_stream(
 
 #[cfg(not(windows))]
 fn capture_stream(
-    _stream: TcpStream,
+    _stream: SecureStream,
     _target: CaptureTarget,
     _session_id: u64,
     _codec: VideoCodec,
@@ -629,6 +661,115 @@ fn draw_number(pixels: &mut [u8], x: usize, y: usize, number: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpStream;
+    use windowdeck_transport::secure::{self, Control, Established, Incoming};
+    use windowdeck_transport::{Intent, Role, Trust};
+
+    /// A paired connection after admission: the host end and the client end.
+    fn admitted_session() -> (SecureStream, SecureStream) {
+        let mut random = [0; 8];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "windowdeck-host-test-{}",
+            random
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ));
+        let host = Trust::open(root.join("host"), Role::Host).unwrap();
+        let client = Trust::open(root.join("client"), Role::Client).unwrap();
+        let (host_identity, client_identity) =
+            (host.identity().unwrap(), client.identity().unwrap());
+        host.add(client_identity.public(), "deck").unwrap();
+        client.add(host_identity.public(), "pc").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            let Ok(Incoming::Secure(accepted)) = secure::accept(socket, &host_identity, "pc")
+            else {
+                panic!("secure client expected");
+            };
+            let mut stream = accepted.stream;
+            stream.send_control(&Control::Accepted).unwrap();
+            stream
+        });
+        let socket = TcpStream::connect(address).unwrap();
+        let Ok(Established::Session(client_stream, _)) =
+            secure::connect(socket, &client_identity, "deck", Intent::Session, |key| {
+                client.is_paired(key)
+            })
+        else {
+            panic!("session expected");
+        };
+        let host_stream = server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        (host_stream, client_stream)
+    }
+
+    #[test]
+    fn the_synthetic_route_negotiates_and_streams_inside_the_encrypted_channel() {
+        let (socket, mut client) = admitted_session();
+        let server = thread::spawn(move || {
+            serve(
+                socket,
+                None,
+                VideoCodec::Rgb332,
+                &mut SessionHealth::default(),
+            )
+        });
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write_message(
+            &mut client,
+            &Message::Hello {
+                app_version: "test".into(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            read_message(&mut client).unwrap(),
+            Message::Hello { .. }
+        ));
+        write_message(
+            &mut client,
+            &Message::Capabilities {
+                max_width: WIDTH,
+                max_height: HEIGHT,
+                max_fps: FPS,
+                codecs: VideoCodec::Rgb332.capability() | connection::CAPABILITY,
+            },
+        )
+        .unwrap();
+        let Message::SessionConfig { session_id, .. } = read_message(&mut client).unwrap() else {
+            panic!("configuration expected");
+        };
+        let mut probes = connection::ProbeReceiver::new(session_id);
+        loop {
+            match read_message(&mut client).unwrap() {
+                Message::Start => break,
+                message => {
+                    if let Some(reply) = probes.receive(message).unwrap() {
+                        write_message(&mut client, &reply).unwrap();
+                    }
+                }
+            }
+        }
+        probes.finish().unwrap();
+        for expected in 0..3 {
+            let Message::Frame { number, pixels, .. } = read_message(&mut client).unwrap() else {
+                panic!("frame expected");
+            };
+            assert_eq!(number, expected);
+            assert_eq!(pixels.len(), usize::from(WIDTH) * usize::from(HEIGHT));
+        }
+        drop(client);
+        assert!(
+            server.join().unwrap().is_err(),
+            "closing the client ends the session"
+        );
+    }
 
     #[test]
     fn pattern_has_expected_size_moves_and_contains_counters() {
@@ -682,10 +823,8 @@ mod tests {
             CaptureTarget::WindowDeckCpu,
             CaptureTarget::WindowDeckNative,
         ] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
+            let (socket, mut client) = admitted_session();
             let server = thread::spawn(move || {
-                let (socket, _) = listener.accept().unwrap();
                 let mut health = SessionHealth::default();
                 let error = serve(socket, Some(target), VideoCodec::H264, &mut health).unwrap_err();
                 assert!(health.activation_started.is_none());
@@ -693,7 +832,6 @@ mod tests {
                 assert!(!health.session_ended(true));
                 error.to_string()
             });
-            let mut client = TcpStream::connect(address).unwrap();
             client
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -772,10 +910,8 @@ mod tests {
                 VideoCodec::Rgb332.capability(),
             ),
         ] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
+            let (socket, mut client) = admitted_session();
             let server = thread::spawn(move || {
-                let (socket, _) = listener.accept().unwrap();
                 serve(
                     socket,
                     Some(target),
@@ -785,7 +921,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
             });
-            let mut client = TcpStream::connect(address).unwrap();
             client
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

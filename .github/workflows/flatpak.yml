@@ -12,6 +12,7 @@ on:
       - crates/windowdeck-media/**
       - crates/windowdeck-diagnostics/**
       - crates/windowdeck-protocol/**
+      - crates/windowdeck-transport/**
       - packaging/**
       - assets/WindowDeck.png
       - scripts/install-steamdeck.sh

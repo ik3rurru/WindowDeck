@@ -18,14 +18,14 @@ de CLI, lanzador y empaquetado que comparten interfaces.
 - Actualizar `WINDOWDECK_ROADMAP.md` y los ADRs cuando una decisión tomada
   aquí cambie una recomendación anterior.
 
-## Estado de la consolidación — 12 de septiembre de 2026
+## Estado de la consolidación — 12 de septiembre de 2026 (bloque 4: 29 de octubre)
 
 | Bloque | Estado |
 | --- | --- |
 | 1 | Implementado: CPU recomendada, diagnósticos en `diag`, referencias históricas congeladas y guía de desarrollo. ADR 0016. |
 | 2 | Implementado en Rust y empaquetado (ADR 0018). Vídeo CPU integrado, latencia y retorno de ventanas aceptados en la Deck; cierre inesperado y reconexión comprobados (ADR 0019). Pendientes UAC cancelado, otras escalas DPI e instalación limpia. |
 | 3 | Pendiente: comparación de las rutas CPU/GPU completas en la Deck y decisión de IPC. |
-| 4 | Documentación actualizada; autenticación y cifrado pendientes. |
+| 4 | Implementado el 29 de octubre (ADR 0022): canal Noise XX, emparejamiento por código, revocación y pruebas de rechazo. Pendiente de aceptación en Windows y en la Deck. |
 | 5 | Distribución junto al ejecutable e integración FFI existentes documentadas en ADR 0017; instalación limpia pendiente. |
 | 6 | Badges añadidos y matriz Windows/Linux comprobada en el último commit publicado. |
 
@@ -128,16 +128,20 @@ autenticación y cifrado. La documentación precisa no sustituye su implementaci
 
 Tareas:
 
-- Diseñar el emparejamiento con código corto vinculado criptográficamente a
+- [x] Diseñar el emparejamiento con código corto vinculado criptográficamente a
   la sesión, caducidad, límites de intentos y confirmación de identidad.
-- Añadir cifrado autenticado a la conexión TCP completa, que hoy transporta
+  Código de seis cifras derivado del resumen Noise con compromiso del cliente,
+  120 segundos, tres intentos por arranque y confirmación en ambas pantallas.
+- [x] Añadir cifrado autenticado a la conexión TCP completa, que hoy transporta
   control y vídeo. Documentar TLS/Noise y la transición de clientes antiguos
   sin degradación silenciosa. Autenticar antes de activar el monitor.
-- Completar los límites y validación de campos en cada mensaje que ya
+  Noise XX; los extremos 0.3.x se rechazan con un mensaje, sin modo en claro.
+- [x] Completar los límites y validación de campos en cada mensaje que ya
   llega desde red, con un test por cada caso de mensaje truncado o
   sobredimensionado (esto ya estaba previsto en el Hito 0/1 original; aquí
   se trata de confirmar que existe cobertura de test real, no solo la
-  intención).
+  intención). Cubre cada tipo de mensaje, los registros cifrados y la negociación.
+- [ ] Aceptar el ciclo emparejar/reconectar/revocar en Windows y en la Deck.
 - [x] Registrar explícitamente en el README qué partes de la Sección 8 ya están
   implementadas y cuáles siguen pendientes, para no dar una falsa sensación
   de seguridad a quien lo pruebe fuera de una red de confianza.

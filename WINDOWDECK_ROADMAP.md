@@ -17,6 +17,13 @@ véanse [ADR 0019](docs/adr/0019-cpu-integrated-player.md) y `docs/testing.md`.
 Continúan pendientes UAC cancelado, otras escalas DPI, sesión prolongada e
 instalación limpia. La ruta GPU conserva su estado experimental.
 
+Actualización del 29 de octubre: control y vídeo viajan por un canal Noise XX
+autenticado; solo los dispositivos emparejados, confirmados con un código de
+seis cifras en ambas pantallas, llegan a negociar vídeo o activar la pantalla.
+Hay revocación en el panel y en la CLI. Pendiente de prueba en Windows y en la
+Deck; rompe la compatibilidad con 0.3.x. Véase el
+[ADR 0022](docs/adr/0022-pairing-and-encryption.md).
+
 ## 1. Visión del proyecto
 
 WindowDeck permitirá utilizar la pantalla de una Steam Deck como un monitor secundario real de un PC con Windows 11.
@@ -365,7 +372,7 @@ Medidas necesarias:
 
 ## 8. Seguridad básica
 
-Estado actual (2026-09-10): el TCP de control y vídeo no está cifrado ni autentica dispositivos. Hay límites de tamaño y colas, validación de mensajes y fragmentos, y reglas de firewall del lanzador limitadas a redes privadas y subred local. mDNS no acredita la identidad del host. El [README](README.md#seguridad-actual) describe estas garantías y carencias; el bloque 4 de consolidación mantiene pendiente implementar el emparejamiento y proteger la conexión completa antes de activar el monitor.
+Estado actual (2026-10-29): implementados el canal cifrado y autenticado (Noise XX), el emparejamiento por comparación de un código de seis cifras con compromiso, caducidad de dos minutos y tres intentos, las claves persistentes por dispositivo, la revocación y la comprobación antes de `Hello`, la validación y la activación del monitor. Las claves y códigos no se registran; solo huellas públicas. mDNS sigue sin acreditar identidad: la acredita la clave. Pendientes: prueba en Windows y en la Deck, cifrado en reposo de la clave privada y entrada remota (inexistente) desactivada por defecto. Véanse el [ADR 0022](docs/adr/0022-pairing-and-encryption.md) y el [README](README.md#seguridad-actual).
 
 Aunque la primera versión funcione solo en la red local, no debe aceptar conexiones anónimas sin conocimiento del usuario.
 

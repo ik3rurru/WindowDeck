@@ -38,6 +38,19 @@ Tres fallos de arranque seguidos pausan los reintentos. Revisa la red y los
 registros; pulsa Detener e Iniciar para volver a probar. Los clientes anteriores
 conservan compatibilidad, pero no realizan la prueba previa de tráfico.
 Diseño y límites en [ADR 0020](adr/0020-connection-validation.md).
+
+La primera vez que una Deck se conecta, el panel muestra su nombre y un código
+de seis cifras con **Aceptar emparejamiento** y **Rechazar**; la Deck muestra el
+mismo código. Acepta solo si coinciden: ambos dispositivos guardan entonces la
+clave del otro y las conexiones siguientes no preguntan. La solicitud caduca a
+los dos minutos; tres rechazos, caducidades o errores seguidos bloquean nuevas
+solicitudes hasta Detener e Iniciar. Debajo, la lista de dispositivos emparejados
+permite **Revocar** uno con la sesión detenida; tendrá que emparejarse de nuevo.
+Una Deck con 0.3.x se rechaza con un aviso para actualizarla. El panel pasa al
+host la ruta de su respuesta en `WINDOWDECK_PAIRING_FILE` (`pairing-decision`,
+en la carpeta de registros de la sesión). Diseño en
+[ADR 0022](adr/0022-pairing-and-encryption.md). El aviso y la revocación del
+panel están pendientes de prueba en Windows.
 Detener o cerrar solicita al host que termine y, en extensión, libere el monitor, con ocho
 segundos de margen antes de terminar su grupo de procesos. Después recoge los
 brokers. La interfaz sigue respondiendo durante esta espera. Cancelar un inicio

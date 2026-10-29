@@ -90,10 +90,13 @@ Véase [ADR 0021](adr/0021-primary-screen-mirroring.md).
 Prueba manual local con el escritorio desbloqueado y FFmpeg/ffprobe en PATH:
 
 ```powershell
-python scripts/test-mirror-host.py --host target/debug/windowdeck-host.exe
+cargo build -p windowdeck-transport --example secure_relay
+python scripts/test-mirror-host.py --host target/debug/windowdeck-host.exe --relay target/debug/examples/secure_relay.exe
 ```
 
 Comprueba captura real, decodificación integrada/MPEG-TS, reconexión y Detener.
+El cliente Python no cifra: llega al host a través de `secure_relay`, con ambos
+extremos emparejados en almacenes temporales.
 El vídeo permanece en memoria; no se guarda. Escucha solo en loopback y fuerza
 una ruta inexistente para el auxiliar del driver. No mide latencia física.
 
@@ -173,7 +176,8 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 target/release/windowdeck-client.exe --media-self-test
-python scripts/test-native-client.py --client target/release/windowdeck-client.exe
+cargo build -p windowdeck-transport --example secure_relay
+python scripts/test-native-client.py --client target/release/windowdeck-client.exe --relay target/debug/examples/secure_relay.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-launcher.ps1
 ```
 
@@ -193,3 +197,26 @@ Con el driver instalado y sin otra instancia abierta, `scripts/test-launcher.ps1
 reglas privadas del firewall. `-Session -TerminatePanel` termina su propio panel
 después del arranque y verifica la recogida de host y broker. Son ensayos locales
 sin cliente: no sustituyen la aceptación visual del vídeo en la Deck.
+
+## Emparejamiento y claves
+
+El host y el cliente solo intercambian mensajes del protocolo dentro del canal
+cifrado de `windowdeck-transport`, después de comprobar que el otro dispositivo
+está emparejado. Diseño, garantías y límites en
+[ADR 0022](adr/0022-pairing-and-encryption.md).
+
+- Claves y listas: `%LOCALAPPDATA%\WindowDeck\security` en Windows y
+  `$XDG_DATA_HOME/windowdeck/security` en Linux (en Flatpak, dentro de
+  `~/.var/app/io.github.ik3rurru.WindowDeck/data`). `WINDOWDECK_DATA_DIR`
+  sustituye la carpeta, por ejemplo para pruebas aisladas.
+- Host: `windowdeck-host devices` lista los dispositivos y la huella del PC;
+  `devices remove HUELLA` (bastan cuatro dígitos) y `devices clear` revocan.
+  Sin panel, un host abierto en una terminal pregunta en la consola; sin panel
+  ni terminal rechaza las solicitudes de emparejamiento.
+- Cliente: `--paired-hosts` lista los PC y `--forget-host HUELLA|all` los olvida.
+  La ventana de emparejamiento se abre en la primera conexión a un PC.
+- `secure_relay` (ejemplo de `windowdeck-transport`) permite que los arneses
+  Python, que no cifran, hablen con el cliente o el host reales. `provision`
+  crea dos almacenes emparejados; `host` y `client` reenvían en loopback.
+- Medición del canal: `cargo test --release -p windowdeck-transport throughput
+  -- --ignored --nocapture`.

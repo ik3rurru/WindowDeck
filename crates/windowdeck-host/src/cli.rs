@@ -1,4 +1,4 @@
-use super::{CaptureTarget, DEFAULT_ADDRESS, Mode};
+use super::{CaptureTarget, DEFAULT_ADDRESS, DevicesCommand, Mode};
 use windowdeck_protocol::VideoCodec;
 
 pub(super) const HELP: &str = "WindowDeck Host
@@ -18,8 +18,15 @@ DIRECCION predeterminada: 0.0.0.0:48150
   diag --help                   Pruebas y rutas historicas de desarrollo
   --driver-native-h264 [DIR]    Ruta GPU experimental; requiere native-media
 
-El lanzador WindowDeck administra el broker y la sesion.
-Emparejamiento y cifrado pendientes: usar solo una LAN de confianza.";
+Dispositivos emparejados:
+  devices [list]                Listar dispositivos y la huella de este PC
+  devices remove HUELLA         Revocar un dispositivo (bastan 4 digitos)
+  devices clear                 Revocar todos los dispositivos
+
+El lanzador WindowDeck administra el broker y la sesion. Solo los dispositivos
+emparejados pueden conectarse; la conexion va cifrada y autenticada. Un
+dispositivo nuevo se empareja comparando un codigo de seis cifras en el panel
+(o en esta consola si se ejecuta en una terminal) y en la Deck.";
 
 pub(super) const DIAG_HELP: &str = "Diagnosticos de WindowDeck (desarrollo)
 
@@ -50,6 +57,7 @@ pub(super) fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode,
         Some("--help" | "-h") => finish(args, Mode::Help),
         Some("--version" | "-V") => finish(args, Mode::Version),
         Some("diag") => parse_diag(args),
+        Some("devices") => parse_devices(args),
         None | Some("--driver-h264") => serve(
             args,
             Some(CaptureTarget::WindowDeckCpu),
@@ -129,6 +137,19 @@ fn parse_diag(mut args: impl Iterator<Item = String>) -> Result<Mode, &'static s
         }
         _ => Err("diagnostico desconocido; consulta 'windowdeck-host diag --help'"),
     }
+}
+
+fn parse_devices(mut args: impl Iterator<Item = String>) -> Result<Mode, &'static str> {
+    let command = match args.next().as_deref() {
+        None | Some("list") => DevicesCommand::List,
+        Some("remove") => DevicesCommand::Remove(
+            args.next()
+                .ok_or("falta la huella del dispositivo; consulta 'windowdeck-host devices'")?,
+        ),
+        Some("clear") => DevicesCommand::Clear,
+        _ => return Err("usa devices [list], devices remove HUELLA o devices clear"),
+    };
+    finish(args, Mode::Devices(command))
 }
 
 fn monitor(value: &str) -> Result<usize, &'static str> {
@@ -228,6 +249,31 @@ mod tests {
             Some(CaptureTarget::WindowDeckCpu)
         );
         assert!(parse(&["--mirror", "--driver-h264"]).is_err());
+    }
+
+    #[test]
+    fn device_commands_never_start_a_session() {
+        assert_eq!(parse(&["devices"]), Ok(Mode::Devices(DevicesCommand::List)));
+        assert_eq!(
+            parse(&["devices", "list"]),
+            Ok(Mode::Devices(DevicesCommand::List))
+        );
+        assert_eq!(
+            parse(&["devices", "remove", "1a2b"]),
+            Ok(Mode::Devices(DevicesCommand::Remove("1a2b".into())))
+        );
+        assert_eq!(
+            parse(&["devices", "clear"]),
+            Ok(Mode::Devices(DevicesCommand::Clear))
+        );
+        for args in [
+            vec!["devices", "remove"],
+            vec!["devices", "forget"],
+            vec!["devices", "clear", "extra"],
+            vec!["devices", "remove", "1a2b", "extra"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

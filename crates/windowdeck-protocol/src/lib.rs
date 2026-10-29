@@ -6,6 +6,7 @@ pub mod quality;
 pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const VIDEO_CHUNK_OVERHEAD: usize = 32;
+const LENGTH_PREFIX: usize = 4;
 pub const MAX_VIDEO_PAYLOAD: usize = MAX_MESSAGE_SIZE - VIDEO_CHUNK_OVERHEAD;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,10 +109,10 @@ impl From<io::Error> for ProtocolError {
     }
 }
 
+/// Writes the length prefix and payload with a single call, so an encrypted
+/// transport seals each message in one record instead of two.
 pub fn write_message(mut writer: impl Write, message: &Message) -> Result<(), ProtocolError> {
-    let payload = encode(message)?;
-    writer.write_all(&(payload.len() as u32).to_be_bytes())?;
-    writer.write_all(&payload)?;
+    writer.write_all(&encode(message)?)?;
     Ok(())
 }
 
@@ -132,7 +133,8 @@ pub fn read_message(mut reader: impl Read) -> Result<Message, ProtocolError> {
 }
 
 fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
-    let mut output = Vec::new();
+    // Reserve the length prefix; it is filled in once the payload size is known.
+    let mut output = vec![0; LENGTH_PREFIX];
     output.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     match message {
         Message::Hello { app_version } => {
@@ -230,9 +232,11 @@ fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             output.extend_from_slice(payload);
         }
     }
-    if output.len() > MAX_MESSAGE_SIZE {
-        return Err(ProtocolError::Oversized(output.len()));
+    let length = output.len() - LENGTH_PREFIX;
+    if length > MAX_MESSAGE_SIZE {
+        return Err(ProtocolError::Oversized(length));
     }
+    output[..LENGTH_PREFIX].copy_from_slice(&(length as u32).to_be_bytes());
     Ok(output)
 }
 
@@ -530,6 +534,223 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn every_message() -> Vec<Message> {
+        vec![
+            Message::Hello {
+                app_version: "0.4.0".into(),
+            },
+            Message::Capabilities {
+                max_width: 1280,
+                max_height: 800,
+                max_fps: 60,
+                codecs: VideoCodec::H264Frames.capability() | connection::CAPABILITY,
+            },
+            Message::SessionConfig {
+                session_id: 42,
+                width: 1280,
+                height: 800,
+                fps: 60,
+                codec: VideoCodec::H264Frames,
+            },
+            Message::Start,
+            Message::Stop,
+            Message::Ping { nonce: 7 },
+            Message::Pong { nonce: 7 },
+            Message::ConnectionProbe {
+                nonce: 7,
+                payload: vec![0x5a; connection::PROBE_BYTES],
+            },
+            Message::Error {
+                code: 2,
+                message: "red".into(),
+            },
+            Message::Frame {
+                session_id: 42,
+                number: 3,
+                captured_micros: 9,
+                width: 3,
+                height: 2,
+                pixels: vec![1; 6],
+            },
+            Message::VideoChunk {
+                session_id: 42,
+                frame_number: 4,
+                captured_micros: 10,
+                fragment_index: 0,
+                fragment_count: 1,
+                keyframe: true,
+                payload: vec![0, 0, 0, 1, 0x65],
+            },
+        ]
+    }
+
+    fn framed(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = (payload.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    #[test]
+    fn every_message_kind_rejects_truncation_and_trailing_bytes() {
+        for message in every_message() {
+            let mut encoded = Vec::new();
+            write_message(&mut encoded, &message).unwrap();
+            let payload = &encoded[LENGTH_PREFIX..];
+            // A video chunk's payload extends to the end of its frame: only its
+            // header and first byte are fixed. Every other body is fully fixed.
+            let fixed = match &message {
+                Message::VideoChunk { payload: video, .. } => payload.len() - video.len() + 1,
+                _ => payload.len(),
+            };
+            // Each shorter body, announced with a consistent length, is incomplete.
+            // Start and Stop have no body: their only prefix is the bare header.
+            for length in 0..fixed {
+                assert!(
+                    read_message(framed(&payload[..length]).as_slice()).is_err(),
+                    "{message:?} accepted {length} of {} bytes",
+                    payload.len()
+                );
+            }
+            if fixed == payload.len() {
+                let mut trailing = payload.to_vec();
+                trailing.push(0);
+                assert!(
+                    matches!(
+                        read_message(framed(&trailing).as_slice()),
+                        Err(ProtocolError::Invalid(_) | ProtocolError::Oversized(_))
+                    ),
+                    "{message:?} accepted a trailing byte"
+                );
+            }
+            // A length prefix promising more than the stream holds never succeeds.
+            let mut short_stream = encoded.clone();
+            short_stream.pop();
+            assert!(matches!(
+                read_message(short_stream.as_slice()),
+                Err(ProtocolError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+            ));
+        }
+    }
+
+    #[test]
+    fn every_message_kind_rejects_oversized_frames_before_allocation() {
+        for message in every_message() {
+            let mut encoded = Vec::new();
+            write_message(&mut encoded, &message).unwrap();
+            // Announce one byte more than the limit; the body is never read.
+            encoded[..LENGTH_PREFIX].copy_from_slice(&(MAX_MESSAGE_SIZE as u32 + 1).to_be_bytes());
+            assert!(matches!(
+                read_message(encoded.as_slice()),
+                Err(ProtocolError::Oversized(size)) if size == MAX_MESSAGE_SIZE + 1
+            ));
+        }
+        assert!(matches!(
+            read_message(u32::MAX.to_be_bytes().as_slice()),
+            Err(ProtocolError::Oversized(_))
+        ));
+    }
+
+    #[test]
+    fn oversized_or_inconsistent_fields_are_rejected_in_both_directions() {
+        let long = "x".repeat(MAX_MESSAGE_SIZE);
+        for message in [
+            Message::Hello {
+                app_version: long.clone(),
+            },
+            Message::Error {
+                code: 1,
+                message: long,
+            },
+            Message::ConnectionProbe {
+                nonce: 1,
+                payload: vec![0x5a; connection::PROBE_BYTES + 1],
+            },
+            Message::Frame {
+                session_id: 1,
+                number: 1,
+                captured_micros: 1,
+                width: 2,
+                height: 2,
+                pixels: vec![0; 3],
+            },
+            Message::Frame {
+                session_id: 1,
+                number: 1,
+                captured_micros: 1,
+                width: 300,
+                height: 300,
+                pixels: vec![0; 90_000],
+            },
+            Message::VideoChunk {
+                session_id: 1,
+                frame_number: 1,
+                captured_micros: 1,
+                fragment_index: 0,
+                fragment_count: 1,
+                keyframe: false,
+                payload: vec![1; MAX_VIDEO_PAYLOAD + 1],
+            },
+            Message::VideoChunk {
+                session_id: 1,
+                frame_number: 1,
+                captured_micros: 1,
+                fragment_index: 0,
+                fragment_count: 0,
+                keyframe: false,
+                payload: vec![1],
+            },
+            Message::VideoChunk {
+                session_id: 1,
+                frame_number: 1,
+                captured_micros: 1,
+                fragment_index: 0,
+                fragment_count: 1,
+                keyframe: false,
+                payload: Vec::new(),
+            },
+        ] {
+            assert!(write_message(Vec::new(), &message).is_err(), "{message:?}");
+        }
+
+        let header = |kind: u8| {
+            let mut payload = PROTOCOL_VERSION.to_be_bytes().to_vec();
+            payload.push(kind);
+            payload
+        };
+        let mut unknown_codec = header(3);
+        unknown_codec.extend_from_slice(&[0; 8]);
+        unknown_codec.extend_from_slice(&[0, 2, 0, 2, 0, 60, 9]);
+        let mut bad_flag = header(10);
+        bad_flag.extend_from_slice(&[0; 28]);
+        bad_flag.extend_from_slice(&[0, 1, 2, 1]);
+        let mut empty_chunk = header(10);
+        empty_chunk.extend_from_slice(&[0; 28]);
+        empty_chunk.extend_from_slice(&[0, 1, 1]);
+        let mut short_probe = header(11);
+        short_probe.extend_from_slice(&[0; 8]);
+        short_probe.extend_from_slice(&[0x5a; 10]);
+        let mut frame_overflow = header(9);
+        frame_overflow.extend_from_slice(&[0; 24]);
+        frame_overflow.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+        let mut bad_utf8 = header(1);
+        bad_utf8.extend_from_slice(&[0, 1, 0xff]);
+        for payload in [
+            header(0),
+            header(12),
+            unknown_codec,
+            bad_flag,
+            empty_chunk,
+            short_probe,
+            frame_overflow,
+            bad_utf8,
+        ] {
+            assert!(
+                read_message(framed(&payload).as_slice()).is_err(),
+                "{payload:?}"
+            );
+        }
     }
 
     #[test]

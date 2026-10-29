@@ -2,7 +2,6 @@ use super::AnyError;
 #[path = "driver_frames.rs"]
 mod driver_frames;
 use std::io::{self, BufRead, BufReader, Read};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -10,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use windowdeck_diagnostics::{Level, emit};
 use windowdeck_protocol::{MAX_VIDEO_PAYLOAD, Message, write_message};
+use windowdeck_transport::SecureStream;
 use windows::Storage::Streams::InMemoryRandomAccessStream;
 use windows::core::Interface;
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
@@ -197,7 +197,7 @@ pub fn encode(index: usize) -> Result<(), AnyError> {
     Ok(())
 }
 
-pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
+pub fn stream_h264(stream: SecureStream, index: usize, session_id: u64) -> Result<(), AnyError> {
     let input = format!(
         "ddagrab=output_idx={}:framerate={ENCODE_FPS}:draw_mouse=1",
         index - 1
@@ -214,7 +214,7 @@ pub fn stream_h264(stream: TcpStream, index: usize, session_id: u64) -> Result<(
 }
 
 pub fn stream_primary_h264(
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     framed: bool,
     size: (u16, u16),
@@ -473,7 +473,7 @@ pub fn virtual_monitor() -> Result<Monitor, AnyError> {
     Err("el monitor WindowDeck desapareció durante la consulta".into())
 }
 
-pub fn stream_virtual_h264(stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+pub fn stream_virtual_h264(stream: SecureStream, session_id: u64) -> Result<(), AnyError> {
     let monitor = virtual_monitor()?;
     let name = monitor.device_name()?;
     let handle = monitor.as_raw_hmonitor() as usize;
@@ -512,7 +512,7 @@ impl Drop for CpuFrameSource {
 }
 
 pub fn stream_driver_h264(
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     framed: bool,
 ) -> Result<(), AnyError> {
@@ -558,12 +558,12 @@ pub fn stream_driver_h264(
 }
 
 #[cfg(not(feature = "native-media"))]
-pub fn stream_native_h264(_stream: TcpStream, _session_id: u64) -> Result<(), AnyError> {
+pub fn stream_native_h264(_stream: SecureStream, _session_id: u64) -> Result<(), AnyError> {
     Err("la integración multimedia no está compilada".into())
 }
 
 #[cfg(feature = "native-media")]
-pub fn stream_native_h264(mut stream: TcpStream, session_id: u64) -> Result<(), AnyError> {
+pub fn stream_native_h264(mut stream: SecureStream, session_id: u64) -> Result<(), AnyError> {
     use windowdeck_diagnostics::Timings;
     use windowdeck_protocol::video::{AccessUnit, fragments};
     let (_lease, mapping) = DisplayLease::acquire_gpu()?;
@@ -685,7 +685,7 @@ impl StreamVideo {
 }
 
 fn stream_h264_input(
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     input: String,
     monitor: String,
@@ -1159,14 +1159,14 @@ fn log_ffmpeg_progress(input: impl Read) -> io::Result<[String; 4]> {
 }
 
 struct StreamFlags {
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     name: String,
     index: usize,
 }
 
 struct CaptureStream {
-    stream: TcpStream,
+    stream: SecureStream,
     session_id: u64,
     started: Instant,
     number: u64,
@@ -1240,7 +1240,7 @@ impl GraphicsCaptureApiHandler for CaptureStream {
     }
 }
 
-pub fn stream(stream: TcpStream, index: usize, session_id: u64) -> Result<(), AnyError> {
+pub fn stream(stream: SecureStream, index: usize, session_id: u64) -> Result<(), AnyError> {
     let monitor = Monitor::from_index(index)?;
     let flags = StreamFlags {
         stream,
