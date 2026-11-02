@@ -47,7 +47,7 @@ se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
 El host negocia vídeo con el reproductor integrado; `--ffplay` sigue disponible
 como reproductor de respaldo mediante MPEG-TS. En la Deck, extrae el paquete
-`WindowDeck-0.3.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+`WindowDeck-0.4.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
 bash install-steamdeck.sh
@@ -84,9 +84,9 @@ Detalles y límites en [calidad de imagen](docs/upscaling-quality.md).
 
 ## Seguridad actual
 
-La release 0.3.1 todavía transmite **sin cifrar ni autenticar**: úsala solo en
-una LAN de confianza. Lo que sigue describe el código actual, pendiente de
-publicar, que necesita actualizar a la vez el PC y la Deck.
+Desde la release 0.4.0 la conexión va cifrada y requiere emparejamiento. Las
+versiones 0.3.x transmiten **sin cifrar ni autenticar** y no pueden conectarse
+con la 0.4.0: actualiza a la vez el PC y la Deck.
 
 Control y vídeo viajan **cifrados y autenticados** (Noise XX con X25519 y
 ChaCha20-Poly1305). Cada PC y cada Deck tienen una clave propia. El PC solo

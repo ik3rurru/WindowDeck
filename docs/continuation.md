@@ -1,4 +1,31 @@
-# Punto de continuación — 29 de octubre de 2026
+# Punto de continuación — 2 de noviembre de 2026
+
+## Release 0.4.0 y prueba en la Deck por Wi-Fi
+
+Se prepara **0.4.0** (rompe compatibilidad con 0.3.x) con el bloque 4 y un
+ajuste del encoder. Notas en `docs/releases/v0.4.0.md`.
+
+Prueba real: Deck LCD (`192.168.1.16`) y PC (`192.168.1.11`), ambos por Wi-Fi
+de 5 GHz (canal 60), modo Extender, Flatpak de CI `9ea6425` (commit Flatpak
+`07bd93ab…`; copia anterior en `~/Downloads/windowdeck-before-pairing-20261102.flatpak`).
+Emparejamiento aceptado en ambas pantallas, reconexión sin volver a pedir el
+código y 60 FPS presentados sin descartes (VAAPI, recibir→presentar ~5,5 ms).
+No se probó la revocación en uso real, DPI 150/200 % ni el modo juego.
+
+Hallazgos:
+
+- Sin stream, UDP a 200 Hz entre PC y Deck muestra paradas de ~35 ms casi cada
+  segundo sin pérdidas; ambos tramos al router tienen picos (PC p90 17 ms,
+  Deck p90 10 ms). El tirón residual es del Wi-Fi, no de WindowDeck.
+- Desactivar la gestión de energía del Wi-Fi en la Deck no quitó esas paradas,
+  pero la ronda más lenta de la validación bajó de ~300 a ~70 ms.
+- El modo por frames enviaba un IDR de 150–350 KB por segundo; ahora libx264
+  usa `keyint=infinite` en ese modo. No se pudo demostrar la mejora en vivo
+  porque domina la red. El usuario prefirió no tocar el Power Saving del
+  adaptador del PC (MT7925, en Auto) ni usar cable.
+- Con IP manual hay que añadir `--native`; sin él el cliente pide RGB332 y el
+  host en Extender lo rechaza. Un segundo cliente con el host ocupado falla con
+  `Resource temporarily unavailable`, mensaje poco claro.
 
 ## Emparejamiento y conexión cifrada (bloque 4)
 
