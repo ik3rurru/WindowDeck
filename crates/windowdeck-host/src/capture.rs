@@ -782,7 +782,10 @@ fn stream_h264_input(
                 "zerolatency",
                 "-x264-params",
                 if framed {
-                    "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0:repeat-headers=1"
+                    // Every framed session starts at an IDR and the native client
+                    // reconnects instead of skipping units, so periodic IDRs only
+                    // add a ~150-350 kB burst per second that stalls Wi-Fi.
+                    "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0:repeat-headers=1:keyint=infinite"
                 } else {
                     "sync-lookahead=0:rc-lookahead=0:ref=1:scenecut=0"
                 },
