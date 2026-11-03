@@ -44,16 +44,18 @@ try {
     }
     $iddDll = Join-Path $iddOutput 'WindowDeckDisplay.dll'
     $iddCat = Join-Path $iddOutput 'WindowDeckDisplay.cat'
-    & $iddSignTool sign /fd SHA256 /sha1 $iddCert.Thumbprint /s My $iddDll
+    # Timestamped signatures stay valid after the 90-day certificate expires.
+    $iddTimestamp = @('/tr', 'http://timestamp.digicert.com', '/td', 'SHA256')
+    & $iddSignTool sign /fd SHA256 /sha1 $iddCert.Thumbprint /s My @iddTimestamp $iddDll
     if ($LASTEXITCODE) { throw 'DLL signing failed.' }
     # Regenerate after signing the DLL so the catalog covers its final contents.
     & $iddInf2Cat "/driver:$iddOutput" /os:10_CO_X64 /uselocaltime
     if ($LASTEXITCODE) { throw 'Catalog generation failed.' }
-    & $iddSignTool sign /fd SHA256 /sha1 $iddCert.Thumbprint /s My $iddCat
+    & $iddSignTool sign /fd SHA256 /sha1 $iddCert.Thumbprint /s My @iddTimestamp $iddCat
     if ($LASTEXITCODE) { throw 'Catalog signing failed.' }
     foreach ($iddSigned in @($iddDll, $iddCat)) {
         $iddSignature = Get-AuthenticodeSignature -LiteralPath $iddSigned
-        if ($iddSignature.Status -ne 'Valid' -or $iddSignature.SignerCertificate.Thumbprint -ne $iddCert.Thumbprint) {
+        if ($iddSignature.Status -ne 'Valid' -or $iddSignature.SignerCertificate.Thumbprint -ne $iddCert.Thumbprint -or !$iddSignature.TimeStamperCertificate) {
             throw "Signature verification failed: $iddSigned"
         }
         & $iddSignTool verify /pa /v $iddSigned

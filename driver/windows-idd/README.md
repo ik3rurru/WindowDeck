@@ -50,7 +50,20 @@ Comprueba checksum y timing preferido del EDID, correspondencia con los modos an
 
 El build continúa generando un paquete sin firmar. El script separado `install-test.ps1` crea o reutiliza un certificado de desarrollo y confía en su parte pública en los almacenes locales Root y TrustedPublisher. **Ejecutarlo solo en el equipo de desarrollo, con autorización para instalar el driver y añadir esa confianza.** No equivale a la firma de distribución de Microsoft; véase la [guía oficial de firma de prueba](https://learn.microsoft.com/en-us/windows-hardware/drivers/develop/signing-a-driver-during-development-and-testing).
 
-La clave privada RSA de 3072 bits permanece no exportable en CurrentUser/My; el certificado caduca a los 90 días. La copia pública queda en `target/idd-signing/WindowDeckDisplay.cer`. El script firma una copia de la DLL, regenera y firma el catálogo, verifica ambas firmas y su correspondencia con DLL/INF, y llama a PnPUtil. El paquete firmado y el registro de instalación quedan en `target/windows-idd-test/`; los originales de compilación se conservan.
+La clave privada RSA de 3072 bits permanece no exportable en CurrentUser/My; el certificado caduca a los 90 días. La copia pública queda en `target/idd-signing/WindowDeckDisplay.cer`. El script firma una copia de la DLL, regenera y firma el catálogo, verifica ambas firmas y su correspondencia con DLL/INF, y llama a PnPUtil. Desde el 3 de noviembre de 2026 ambas firmas llevan sello de tiempo de DigiCert (necesita conexión al firmar), así que siguen siendo válidas cuando caduca el certificado; el script falla si falta el sello.
+
+**Caducidad.** Los paquetes firmados antes de esa fecha no tienen sello y dejan de ser válidos con su certificado. Para conservar el driver instalado, vuelve a ejecutar `install-test.ps1` mientras el certificado siga vigente: reutiliza el mismo y reinstala con sello. Para firmar un build nuevo después de la caducidad hace falta otro certificado. El script no lo sustituye en silencio; como administrador, retira el anterior y vuelve a ejecutarlo:
+
+```powershell
+$old = [Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path target/idd-signing/WindowDeckDisplay.cer))
+foreach ($store in 'Cert:/LocalMachine/Root', 'Cert:/LocalMachine/TrustedPublisher', 'Cert:/CurrentUser/My') {
+    Remove-Item -LiteralPath "$store/$($old.Thumbprint)" -ErrorAction SilentlyContinue
+}
+Remove-Item target/idd-signing/WindowDeckDisplay.cer
+powershell -NoProfile -ExecutionPolicy Bypass -File driver/windows-idd/install-test.ps1
+```
+
+Retirar la raíz anterior deja sin confianza todo lo firmado con ella, tenga sello o no; el script reinstala después el driver con el certificado nuevo. La firma de distribución sustituirá este procedimiento; véase [CODE_SIGNING.md](../../CODE_SIGNING.md). El paquete firmado y el registro de instalación quedan en `target/windows-idd-test/`; los originales de compilación se conservan.
 
 Desde la raíz del repositorio, cerrar antes cualquier instancia de `windowdeck-display` y ejecutar en PowerShell **como administrador**:
 

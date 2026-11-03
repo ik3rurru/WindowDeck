@@ -24,7 +24,8 @@ de confianza. El paquete incluye FFmpeg y sus DLL; no requiere instalarlos por
 separado ni modificar el PATH. Para extender, también necesitas el
 [driver de prueba de WindowDeck instalado](driver/windows-idd/README.md).
 El driver sigue utilizando firma de desarrollo; el paquete de la aplicación
-no lo instala. Duplicar no requiere instalarlo.
+no lo instala. Duplicar no requiere instalarlo. Firma de las releases:
+[Code signing policy](CODE_SIGNING.md).
 
 1. Descomprime el paquete Windows y abre **`WindowDeck.exe`** sin ejecutar como
    administrador. Elige **Extender escritorio** o **Duplicar pantalla principal**,
