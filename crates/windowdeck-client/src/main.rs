@@ -50,7 +50,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     if matches!(env::args().nth(1).as_deref(), Some("--help" | "-h")) {
         println!(
-            "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--native] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n     windowdeck-client --paired-hosts | --forget-host HUELLA|all\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana.\n\nLa conexión va cifrada. La primera vez con un PC, ambos muestran un código\nde seis cifras: confírmalo en la Deck y en el panel de Windows."
+            "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n     windowdeck-client --paired-hosts | --forget-host HUELLA|all\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana.\n\nLa conexión va cifrada. La primera vez con un PC, ambos muestran un código\nde seis cifras: confírmalo en la Deck y en el panel de Windows."
         );
         return Ok(());
     }
@@ -82,10 +82,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let options = parse_options(env::args().skip(1))?;
+    // H.264 uses the integrated player unless a comparison flag asks for FFplay,
+    // with mDNS and with a manual address alike.
     let native = env::args().any(|arg| arg == "--native")
         || (cfg!(feature = "native-media")
-            && options.address == "auto"
-            && !env::args().any(|arg| arg == "--ffplay")
+            && options.h264_test
+            && !env::args().any(|arg| arg == "--ffplay" || arg == "--h264-test")
             && !options.ffplay_baseline);
     if native && !cfg!(feature = "native-media") {
         return Err("recompila con --features native-media para usar --native".into());
@@ -165,6 +167,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     let mut fullscreen = false;
     let mut h264_test = false;
     let mut ffplay_baseline = false;
+    let mut rgb332 = false;
     let mut quality = Quality::Auto;
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -173,6 +176,7 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
             "--h264-test" => h264_test = true,
             "--native" | "--ffplay" => h264_test = true,
             "--ffplay-baseline" => ffplay_baseline = true,
+            "--rgb332" => rgb332 = true,
             "--quality" => {
                 quality = Quality::parse(&args.next().ok_or("falta el perfil de --quality")?)?
             }
@@ -184,9 +188,14 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, &'st
     if ffplay_baseline && !h264_test {
         return Err("--ffplay-baseline requiere --h264-test");
     }
-    if address.as_deref().is_none_or(|value| value == "auto") {
-        h264_test = true;
+    if rgb332 && (h264_test || ffplay_baseline || quality != Quality::Auto) {
+        return Err("--rgb332 no se combina con las opciones H.264");
     }
+    if rgb332 && address.as_deref().is_none_or(|value| value == "auto") {
+        return Err("--rgb332 requiere IP:PUERTO");
+    }
+    // A bare address used to request RGB332, which only `diag pattern` serves.
+    h264_test = !rgb332;
     Ok(Options {
         address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
         fullscreen,
@@ -1458,7 +1467,7 @@ mod tests {
             Ok(Options {
                 address: "192.0.2.1:48150".into(),
                 fullscreen: true,
-                h264_test: false,
+                h264_test: true,
                 ffplay_baseline: false,
                 quality: Quality::Auto,
             })
@@ -1493,6 +1502,15 @@ mod tests {
                 quality: Quality::Auto,
             })
         );
+        let pattern = parse_options(["192.0.2.1:48150", "--rgb332"].map(String::from))
+            .expect("valid RGB332 pattern client");
+        assert!(!pattern.h264_test);
+        for args in [
+            vec!["--rgb332"],
+            vec!["192.0.2.1:48150", "--rgb332", "--native"],
+        ] {
+            assert!(parse_options(args.into_iter().map(String::from)).is_err());
+        }
         assert!(parse_options(["--unknown".into()]).is_err());
         assert!(parse_options(["--ffplay-baseline".into()]).is_err());
         let baseline = parse_options([

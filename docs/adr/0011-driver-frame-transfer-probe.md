@@ -1,5 +1,7 @@
 # ADR 0011: prototipo de frames del IDD a memoria compartida
 
+> Decisión final (2026-11-03): el [ADR 0023](0023-cpu-frame-ipc.md) adopta la ruta CPU como IPC definitivo y congela la de texturas D3D11.
+
 > Actualización de consolidación (2026-09-10): el probe se ejecuta con `windowdeck-host diag driver-frames`. La ruta CPU es la predeterminada según el [ADR 0016](0016-supported-video-routes.md), pero la elección definitiva del IPC sigue pendiente de la comparación integrada. Las mediciones siguientes son del probe original.
 
 - Fecha: 2026-09-07

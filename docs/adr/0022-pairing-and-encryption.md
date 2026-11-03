@@ -48,7 +48,10 @@ conectarse por TCP, activar la pantalla virtual y recibir el escritorio en claro
   `client-identity.txt` y `paired-hosts.txt`. `WINDOWDECK_DATA_DIR` sustituye la
   carpeta en pruebas.
 - En Linux se crean con permisos 0700/0600. En Windows heredan la ACL de la
-  carpeta de datos del usuario. La clave privada no se cifra en reposo.
+  carpeta de datos del usuario y, desde 0.4.1, la clave privada se guarda
+  sellada con DPAPI-NG (`LOCAL=user`) como `windowdeck-identity 2`. El formato 1
+  en claro de 0.4.0 se sella al leerlo con la misma clave, sin perder
+  emparejamientos. En Linux la clave sigue en claro con permisos 0600.
 - Un archivo dañado es un error explícito; nunca se regenera en silencio, porque
   eso anularía todos los emparejamientos sin explicarlo.
 - La huella son los primeros 8 bytes del SHA-256 de la clave pública
@@ -143,7 +146,8 @@ conectarse por TCP, activar la pantalla virtual y recibir el escritorio en claro
 ## Límites
 
 - No protege frente a quien controla el PC o la Deck, ni frente a programas
-  locales que lean la clave privada, que no se cifra en reposo.
+  que se ejecuten con la cuenta del usuario: DPAPI descifra para cualquier
+  proceso de ese usuario, y en Linux la clave está en claro.
 - No oculta metadatos: el tamaño y el ritmo de los registros revelan actividad,
   y mDNS anuncia el PC.
 - No hay rotación de claves durante la sesión; los contadores de 64 bits no se

@@ -498,7 +498,7 @@ Estado actual (2026-09-10): el [driver C++ x64](driver/windows-idd/README.md) 0.
 
 Se ha comprobado con el cliente anterior de la Deck la activación y retirada del monitor, el cierre del cliente y del host, la recuperación de desconexiones y pruebas de suspensión y bloqueo documentadas. También existen probes de transferencia CPU y D3D11; sus cifras no equivalen a una validación del vídeo GPU completo. El historial y las incidencias intermedias se conservan en [docs/testing.md](docs/testing.md) y [docs/continuation.md](docs/continuation.md).
 
-El hito sigue abierto: faltan la comparación integrada CPU/GPU y la decisión final de IPC, pruebas de cambio de usuario y varias GPU, la consolidación del broker y la firma e instalación distribuible del driver. El encoder permanece en el host según el [ADR 0017](docs/adr/0017-media-packaging.md).
+El hito sigue abierto: el IPC queda decidido por frames CPU en el [ADR 0023](docs/adr/0023-cpu-frame-ipc.md); faltan pruebas de cambio de usuario y varias GPU, la consolidación del broker y la firma e instalación distribuible del driver. El encoder permanece en el host según el [ADR 0017](docs/adr/0017-media-packaging.md).
 
 Tareas:
 

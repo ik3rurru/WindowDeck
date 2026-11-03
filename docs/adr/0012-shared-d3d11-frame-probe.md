@@ -1,5 +1,7 @@
 # ADR 0012: comparación de frames con texturas D3D11 compartidas
 
+> Decisión final (2026-11-03): el [ADR 0023](0023-cpu-frame-ipc.md) adopta la ruta CPU como IPC definitivo y congela la de texturas D3D11.
+
 > Actualización de consolidación (2026-09-10): este probe se ejecuta con `windowdeck-host diag gpu-frames`. `windowdeck-media` ya implementa el consumo de texturas, conversión y encoder en el host, con pruebas sintéticas. Falta validar el pipeline completo en la Deck y cerrar el IPC. Véanse los [ADR 0016](0016-supported-video-routes.md) y [0017](0017-media-packaging.md); las medidas originales de este documento no incluyen ese pipeline de vídeo.
 
 - Fecha: 2026-09-07

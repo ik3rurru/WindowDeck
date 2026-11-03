@@ -20,7 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 El primer comando obtiene SDK con versión y SHA256 fijados, compila release y
 copia FFmpeg/SDL junto a los binarios. `-Download` solo descarga archivos ausentes.
 El segundo compila el auxiliar y el paquete del driver; no instala la DLL.
-El ZIP queda en `target/package-<identificador>/WindowDeck-0.4.0-windows-x64.zip` e incluye versiones,
+El ZIP queda en `target/package-<identificador>/WindowDeck-0.4.1-windows-x64.zip` e incluye versiones,
 hashes, licencias y fuentes. La validación en un Windows limpio sigue pendiente.
 `scripts/package-windows.ps1 -Release` exige un árbol limpio e incluye las
 fuentes del commit exacto. El empaquetado normal solo necesita compilar el
@@ -62,10 +62,9 @@ Si el auxiliar está fuera de las ubicaciones habituales, configura
 `WINDOWDECK_DISPLAY_EXE`. El broker pertenece a la misma sesión de Windows.
 
 El cliente habitual se abre con `flatpak run io.github.ik3rurru.WindowDeck`.
-Con el cliente nuevo, la IP manual usa `IP_DEL_PC:48150 --native`; sin dirección,
-el cliente con `native-media` selecciona automáticamente el reproductor integrado.
-`--h264-test` con IP manual y `--ffplay` permiten comprobar MPEG-TS. Los clientes
-anteriores conservan `IP_DEL_PC:48150 --h264-test`.
+Con `native-media`, el cliente usa el reproductor integrado tanto sin dirección
+como con `IP_DEL_PC:48150`; `--native` ya no es necesario. `--h264-test` y
+`--ffplay` permiten comprobar MPEG-TS.
 
 ## Duplicación sin driver virtual
 
@@ -136,7 +135,7 @@ sesión inactiva; cambiar la CLI no cambia el procedimiento de aceptación.
 | `diag auto-virtual-h264 [DIRECCION]` | WGC y monitor ligado a la sesión; requiere `windowdeck-display --broker`. |
 
 La dirección predeterminada es `0.0.0.0:48150`. RGB332 utiliza el cliente con
-`IP_DEL_PC:48150`; las rutas H.264 requieren además `--h264-test`.
+`IP_DEL_PC:48150 --rgb332`; las rutas H.264 requieren `--h264-test`.
 Para WGC se conserva FFmpeg con `gfxcapture`, comprobado en la versión incluida.
 Las instrucciones y resultados originales permanecen fechados en
 [testing.md](testing.md) y los ADR 0003–0014.

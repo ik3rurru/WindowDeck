@@ -2285,7 +2285,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windowdeck-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "font8x8",
  "softbuffer",
@@ -2298,11 +2298,11 @@ dependencies = [
 
 [[package]]
 name = "windowdeck-diagnostics"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "windowdeck-host"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "getrandom 0.3.4",
  "windowdeck-diagnostics",
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "windowdeck-launcher"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "command-group",
  "getrandom 0.3.4",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "windowdeck-media"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2338,20 +2338,21 @@ dependencies = [
 
 [[package]]
 name = "windowdeck-protocol"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "mdns-sd",
 ]
 
 [[package]]
 name = "windowdeck-transport"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "curve25519-dalek",
  "getrandom 0.3.4",
  "sha2",
  "snow",
  "windowdeck-protocol",
+ "windows",
 ]
 
 [[package]]

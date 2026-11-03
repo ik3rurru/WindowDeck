@@ -323,16 +323,21 @@ pub fn connect(
     socket.write_all(&first)?;
     let mut reply = [0; PREAMBLE_LEN];
     if let Err(error) = socket.read_exact(&mut reply) {
-        return Err(match error.kind() {
+        let reason = match error.kind() {
             io::ErrorKind::UnexpectedEof
             | io::ErrorKind::ConnectionReset
-            | io::ErrorKind::ConnectionAborted => io::Error::new(
-                error.kind(),
-                "el PC cerró la conexión al iniciar el cifrado; si usa una versión anterior de WindowDeck, actualízala",
-            )
-            .into(),
-            _ => error.into(),
-        });
+            | io::ErrorKind::ConnectionAborted => {
+                "el PC cerró la conexión al iniciar el cifrado; si usa una versión anterior de WindowDeck, actualízala"
+            }
+            // The host answers the preamble before any check, so silence means it
+            // is serving another session and this one waits in the TCP backlog.
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+                "el PC no responde; probablemente ya está transmitiendo a otro dispositivo. Cierra esa sesión o pulsa Detener e Iniciar en Windows"
+            }
+            _ => return Err(error.into()),
+        };
+        // Keep the kind: callers decide from it whether to retry.
+        return Err(io::Error::new(error.kind(), reason).into());
     }
     if reply[..4] != MAGIC {
         return Err(SecureError::Protocol(

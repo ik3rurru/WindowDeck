@@ -12,5 +12,8 @@ sha2 = { version = "0.10.9", default-features = false }
 snow = { version = "0.10.0", default-features = false, features = ["use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
 windowdeck-protocol = { path = "../windowdeck-protocol" }
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Security_Cryptography_DataProtection", "Storage_Streams"] }
+
 [lints]
 workspace = true
