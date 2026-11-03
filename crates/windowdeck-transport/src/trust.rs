@@ -1,7 +1,8 @@
 //! Device identity and the list of paired peers, stored per user.
 //!
-//! The private key never leaves this directory and is never logged. Peers are
-//! identified by their static public key; names are only labels for people.
+//! The private key never leaves this directory and is never logged. On Windows
+//! it is sealed with DPAPI for the current user; on Linux the file is 0600.
+//! Peers are identified by their static public key; names are only labels.
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -17,6 +18,9 @@ const MIN_SELECTOR_DIGITS: usize = 4;
 pub const MAX_NAME_CHARS: usize = 40;
 const MAX_FILE: u64 = 1 << 20;
 const IDENTITY_HEADER: &str = "windowdeck-identity 1";
+/// Same key, sealed with DPAPI. Only Windows writes or reads it.
+#[cfg(any(windows, test))]
+const SEALED_IDENTITY_HEADER: &str = "windowdeck-identity 2";
 const PEERS_HEADER: &str = "windowdeck-paired 1";
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,22 +167,27 @@ impl Trust {
     pub fn identity(&self) -> io::Result<Identity> {
         let path = self.dir.join(self.role.identity_file());
         match read_limited(&path) {
-            Ok(text) => parse_identity(&text).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "la identidad de WindowDeck está dañada: {}. Bórrala para crear otra; habrá que emparejar de nuevo",
-                        path.display()
-                    ),
-                )
-            }),
+            Ok(text) => {
+                let (identity, sealed) = parse_identity(&text).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "la identidad de WindowDeck está dañada o es de otro usuario: {}. Bórrala para crear otra; habrá que emparejar de nuevo",
+                            path.display()
+                        ),
+                    )
+                })?;
+                if cfg!(windows) && !sealed {
+                    // 0.4.0 stored the key in clear. Seal it in place, keeping the
+                    // same key so every pairing survives. The rename is atomic: on
+                    // failure the old file stays and the next start tries again.
+                    let _ = write_private(&path, &encode_identity(&identity)?, true);
+                }
+                Ok(identity)
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let identity = Identity::generate()?;
-                write_private(
-                    &path,
-                    &format!("{IDENTITY_HEADER}\n{}\n", hex(identity.private())),
-                    false,
-                )?;
+                write_private(&path, &encode_identity(&identity)?, false)?;
                 // Another process may have created it first: always use the stored key.
                 self.identity()
             }
@@ -360,16 +369,68 @@ pub fn sanitize_name(raw: &str) -> String {
     }
 }
 
-fn parse_identity(text: &str) -> Option<Identity> {
+fn encode_identity(identity: &Identity) -> io::Result<String> {
+    #[cfg(windows)]
+    let text = format!(
+        "{SEALED_IDENTITY_HEADER}\n{}\n",
+        hex(&dpapi::seal(identity.private())?)
+    );
+    #[cfg(not(windows))]
+    let text = format!("{IDENTITY_HEADER}\n{}\n", hex(identity.private()));
+    Ok(text)
+}
+
+/// Returns the identity and whether it was stored sealed.
+fn parse_identity(text: &str) -> Option<(Identity, bool)> {
     let mut lines = text.lines();
-    if lines.next()? != IDENTITY_HEADER {
-        return None;
-    }
-    let private = parse_key(lines.next()?)?;
+    let header = lines.next()?;
+    let payload = lines.next()?;
     if lines.any(|line| !line.trim().is_empty()) {
         return None;
     }
-    Some(Identity::from_private(private))
+    let (private, sealed) = match header {
+        IDENTITY_HEADER => (parse_key(payload)?, false),
+        #[cfg(windows)]
+        SEALED_IDENTITY_HEADER => {
+            let opened = dpapi::open(&parse_hex(payload)?).ok()?;
+            (opened.try_into().ok()?, true)
+        }
+        _ => return None,
+    };
+    Some((Identity::from_private(private), sealed))
+}
+
+/// DPAPI-NG through WinRT, so the crate stays free of `unsafe`.
+#[cfg(windows)]
+mod dpapi {
+    use std::io;
+    use windows::Security::Cryptography::CryptographicBuffer;
+    use windows::Security::Cryptography::DataProtection::DataProtectionProvider;
+    use windows::Storage::Streams::IBuffer;
+    use windows::core::{Array, HSTRING};
+
+    /// Only the current Windows user on this computer can open the result.
+    pub fn seal(data: &[u8]) -> io::Result<Vec<u8>> {
+        let provider =
+            DataProtectionProvider::CreateOverloadExplicit(&HSTRING::from("LOCAL=user"))?;
+        let input = CryptographicBuffer::CreateFromByteArray(data)?;
+        bytes(&provider.ProtectAsync(&input)?.join()?)
+    }
+
+    pub fn open(data: &[u8]) -> io::Result<Vec<u8>> {
+        let input = CryptographicBuffer::CreateFromByteArray(data)?;
+        bytes(
+            &DataProtectionProvider::new()?
+                .UnprotectAsync(&input)?
+                .join()?,
+        )
+    }
+
+    fn bytes(buffer: &IBuffer) -> io::Result<Vec<u8>> {
+        let mut out = Array::new();
+        CryptographicBuffer::CopyToByteArray(buffer, &mut out)?;
+        Ok(out.to_vec())
+    }
 }
 
 fn parse_devices(text: &str) -> Option<Vec<Device>> {
@@ -396,14 +457,17 @@ fn parse_devices(text: &str) -> Option<Vec<Device>> {
 }
 
 fn parse_key(text: &str) -> Option<[u8; KEY_LEN]> {
-    if text.len() != KEY_LEN * 2 || !text.is_ascii() {
+    parse_hex(text)?.try_into().ok()
+}
+
+fn parse_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return None;
     }
-    let mut key = [0; KEY_LEN];
-    for (index, byte) in key.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).ok()?;
-    }
-    Some(key)
+    (0..text.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&text[index..index + 2], 16).ok())
+        .collect()
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -477,6 +541,26 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o077, 0, "identity readable by others: {mode:o}");
         }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn clear_identity_from_0_4_0_keeps_its_key() {
+        let dir = temporary_dir("legacy");
+        let private = [7; KEY_LEN];
+        let legacy = format!("{IDENTITY_HEADER}\n{}\n", hex(&private));
+        fs::write(dir.join("host-identity.txt"), &legacy).unwrap();
+        let trust = Trust::open(&dir, Role::Host).unwrap();
+        let expected = Identity::from_private(private).public();
+        assert_eq!(trust.identity().unwrap().public(), expected);
+        let stored = fs::read_to_string(dir.join("host-identity.txt")).unwrap();
+        if cfg!(windows) {
+            assert!(stored.starts_with(SEALED_IDENTITY_HEADER), "{stored}");
+            assert!(!stored.contains(&hex(&private)));
+        } else {
+            assert_eq!(stored, legacy);
+        }
+        assert_eq!(trust.identity().unwrap().public(), expected);
         fs::remove_dir_all(dir).unwrap();
     }
 

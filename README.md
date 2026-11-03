@@ -47,7 +47,7 @@ se ejecuta sin elevar. Detalles en [la guía del lanzador](docs/launcher.md).
 
 El host negocia vídeo con el reproductor integrado; `--ffplay` sigue disponible
 como reproductor de respaldo mediante MPEG-TS. En la Deck, extrae el paquete
-`WindowDeck-0.4.0-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
+`WindowDeck-0.4.1-steamdeck-x86_64.tar.gz` y ejecuta en su carpeta:
 
 ```bash
 bash install-steamdeck.sh
@@ -70,7 +70,7 @@ flatpak run io.github.ik3rurru.WindowDeck --fullscreen
 ```
 
 Si mDNS no está disponible, admite una dirección manual:
-`flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --native --fullscreen`.
+`flatpak run io.github.ik3rurru.WindowDeck IP_DEL_PC:48150 --fullscreen`.
 La primera conexión a un PC muestra el código de emparejamiento.
 Cerrar la X cancela la reconexión; F11 alterna pantalla completa y Escape vuelve
 al modo ventana. El panel de Windows y la gestión de sus procesos están en Rust.
@@ -105,8 +105,9 @@ detenida; también `windowdeck-host devices`. En la Deck, `--paired-hosts` y
 `--forget-host`. Las claves se guardan en la carpeta de datos del usuario
 (`%LOCALAPPDATA%\WindowDeck\security` y, en la Deck, la del Flatpak).
 
-Límites: la clave privada no se cifra en reposo, así que un programa con acceso
-a tu cuenta puede leerla. mDNS sigue anunciando el PC y el ritmo del tráfico
+Límites: en Windows la clave privada se guarda cifrada con DPAPI para tu
+usuario; en la Deck solo la protegen los permisos del archivo. Un programa que
+se ejecute con tu cuenta puede usarla en ambos casos. mDNS sigue anunciando el PC y el ritmo del tráfico
 revela actividad. Los clientes y hosts 0.3.x no pueden conectarse con esta
 versión: actualiza ambos extremos. Hay mensajes versionados, límites de 64 KiB
 por mensaje, validación de fragmentos y de cada campo, límites de tiempo y de

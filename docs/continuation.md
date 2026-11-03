@@ -1,4 +1,24 @@
-# Punto de continuación — 2 de noviembre de 2026
+# Punto de continuación — 3 de noviembre de 2026
+
+## Preparación de 0.4.1
+
+Revisión de lo que falta para una 1.0: el bloqueo es el driver, con firma de
+desarrollo cuyo certificado caduca el **4 de diciembre de 2026**, sin firma de
+distribución ni instalador probado en un Windows limpio. 0.4.1 recoge los
+arreglos pequeños (notas en `docs/releases/v0.4.1.md`), sin publicar:
+
+- IP manual sin `--native`; RGB332 solo con `--rgb332` para `diag pattern`.
+- Mensaje claro si el host ya atiende otra sesión (el host es secuencial y la
+  segunda conexión agotaba el tiempo del handshake). Sin probar con dos Decks.
+- Clave privada sellada con DPAPI-NG en Windows y migración de la 0.4.0 con la
+  misma clave. Probado con prueba unitaria en Windows; falta comprobar en el
+  panel que la identidad real se migra y la Deck sigue emparejada.
+- `SECURITY.md`, plantilla de issues y ADR 0023 (IPC CPU definitivo, sin A/B).
+  El reporte privado de vulnerabilidades está **desactivado** en GitHub; hay que
+  activarlo en Settings → Security para que funcione el enlace de `SECURITY.md`.
+
+Pasan formato, Clippy (Windows y Linux para `transport`), pruebas con y sin
+`native-media` y `test-native-client.py` con IP manual sin `--native`.
 
 ## Release 0.4.0 y prueba en la Deck por Wi-Fi
 

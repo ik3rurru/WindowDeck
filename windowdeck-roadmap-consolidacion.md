@@ -24,7 +24,7 @@ de CLI, lanzador y empaquetado que comparten interfaces.
 | --- | --- |
 | 1 | Implementado: CPU recomendada, diagnósticos en `diag`, referencias históricas congeladas y guía de desarrollo. ADR 0016. |
 | 2 | Implementado en Rust y empaquetado (ADR 0018). Vídeo CPU integrado, latencia y retorno de ventanas aceptados en la Deck; cierre inesperado y reconexión comprobados (ADR 0019). Pendientes UAC cancelado, otras escalas DPI e instalación limpia. |
-| 3 | Pendiente: comparación de las rutas CPU/GPU completas en la Deck y decisión de IPC. |
+| 3 | Decidido el 3 de noviembre (ADR 0023): IPC por frames CPU; la ruta D3D11 queda congelada como experimento. Sin la comparación A/B completa en la Deck, riesgo aceptado en el ADR. |
 | 4 | Implementado el 29 de octubre (ADR 0022): canal Noise XX, emparejamiento por código, revocación y pruebas de rechazo. Pendiente de aceptación en Windows y en la Deck. |
 | 5 | Distribución junto al ejecutable e integración FFI existentes documentadas en ADR 0017; instalación limpia pendiente. |
 | 6 | Badges añadidos y matriz Windows/Linux comprobada en el último commit publicado. |
@@ -96,6 +96,10 @@ launcher.
 ---
 
 ## Bloque 3 — Decidir el IPC definitivo del driver
+
+**Estado:** cerrado por el [ADR 0023](docs/adr/0023-cpu-frame-ipc.md). Se mantiene
+la ruta CPU y se cierra la rama D3D11 compartida sin la comparación A/B en la
+Deck; el ADR indica cuándo reabrirla.
 
 **Motivo:** es el mayor riesgo abierto del proyecto según la propia tabla de
 riesgos del roadmap original, y bloquea cualquier intento serio de reducir

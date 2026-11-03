@@ -141,7 +141,8 @@ def main():
         try:
             env = dict(client_env, SDL_VIDEODRIVER="dummy")
             quality = ["--quality", "1440p"] if args.high_resolution else []
-            result = subprocess.run([args.client, relay_address, "--native", *quality],
+            # No --native: a manual address must pick the integrated player itself.
+            result = subprocess.run([args.client, relay_address, *quality],
                                     env=env, capture_output=True, text=True, timeout=25, **hidden)
             server.join(timeout=2)
         finally:
