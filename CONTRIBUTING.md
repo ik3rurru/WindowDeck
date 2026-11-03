@@ -8,4 +8,4 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Mantén los cambios pequeños y no añadas dependencias o abstracciones sin una necesidad comprobada. Las decisiones arquitectónicas se registran en `docs/adr/`.
+Mantén los cambios pequeños y no añadas dependencias o abstracciones sin una necesidad comprobada. Las decisiones arquitectónicas se registran en `docs/adr/`. El mantenedor revisa cada pull request externo antes de fusionarlo.
