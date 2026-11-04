@@ -1,4 +1,23 @@
-# Punto de continuación — 3 de noviembre de 2026
+# Punto de continuación — 4 de noviembre de 2026
+
+## Publicación de 0.4.1 y preparación de SignPath
+
+- El workflow Release compila ya el driver completo y publica
+  `WindowDeck-VERSION-driver-x64-unsigned.zip` (DLL, INF, CAT, licencia); CI
+  lo compila en cada push. El runner trae VS 2026 con
+  `Component.Microsoft.Windows.DriverKit`, que `build.ps1` acepta.
+- `CODE_SIGNING.md` está en inglés y el README abre con un resumen en inglés.
+- Migración DPAPI comprobada en el panel el 4 de noviembre: `host-identity.txt`
+  pasó a `windowdeck-identity 2`, la huella sigue siendo `7cee-6d51-4040-3d54`,
+  `paired-clients.txt` no cambió y la Deck conectó sin pedir código.
+- El reporte privado de vulnerabilidades ya está activado en GitHub.
+- En local, `package-windows.ps1` falla con `-ControlOnly` porque falta el SDK
+  `10.0.28000.0` instalado; compilar antes `build.ps1` completo y empaquetar
+  con `-SkipBuild`.
+- Pendiente: solicitar SignPath (mencionar que es un IDD como Virtual Display
+  Driver) y volver a ejecutar `install-test.ps1` antes del 4 de diciembre.
+  `docs/pyrowave-evaluation.md` sigue sin commit, a la espera de decisión.
+
 
 ## Preparación de 0.4.1
 
@@ -11,11 +30,9 @@ arreglos pequeños (notas en `docs/releases/v0.4.1.md`), sin publicar:
 - Mensaje claro si el host ya atiende otra sesión (el host es secuencial y la
   segunda conexión agotaba el tiempo del handshake). Sin probar con dos Decks.
 - Clave privada sellada con DPAPI-NG en Windows y migración de la 0.4.0 con la
-  misma clave. Probado con prueba unitaria en Windows; falta comprobar en el
-  panel que la identidad real se migra y la Deck sigue emparejada.
+  misma clave. Probado con prueba unitaria en Windows y en el panel real.
 - `SECURITY.md`, plantilla de issues y ADR 0023 (IPC CPU definitivo, sin A/B).
-  El reporte privado de vulnerabilidades está **desactivado** en GitHub; hay que
-  activarlo en Settings → Security para que funcione el enlace de `SECURITY.md`.
+  El reporte privado de vulnerabilidades ya está activado en GitHub.
 
 Pasan formato, Clippy (Windows y Linux para `transport`), pruebas con y sin
 `native-media` y `test-native-client.py` con IP manual sin `--native`.
