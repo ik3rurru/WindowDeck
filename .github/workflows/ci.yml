@@ -30,6 +30,14 @@ jobs:
         shell: powershell
         run: ./scripts/test-launcher.ps1 -Launcher target/debug/windowdeck-launcher.exe
 
+  driver:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build unsigned driver package
+        shell: pwsh
+        run: ./driver/windows-idd/build.ps1
+
   native:
     strategy:
       matrix:
