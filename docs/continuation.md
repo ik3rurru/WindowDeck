@@ -14,8 +14,12 @@
 - En local, `package-windows.ps1` falla con `-ControlOnly` porque falta el SDK
   `10.0.28000.0` instalado; compilar antes `build.ps1` completo y empaquetar
   con `-SkipBuild`.
-- Pendiente: solicitar SignPath (mencionar que es un IDD como Virtual Display
-  Driver) y volver a ejecutar `install-test.ps1` antes del 4 de diciembre.
+- SignPath Foundation rechazó la solicitud el 4 de noviembre por falta de
+  visibilidad pública (estrellas, forks, menciones externas); se puede volver a
+  solicitar más adelante. Las releases siguen sin firmar.
+- `install-test.ps1` ya volvió a firmar el driver instalado con sello de tiempo
+  (`oem101.inf` 0.1.0.9, Extender comprobado), así que sobrevive a la caducidad
+  del certificado del 4 de diciembre.
   `docs/pyrowave-evaluation.md` sigue sin commit, a la espera de decisión.
 
 
