@@ -38,6 +38,10 @@ El driver sigue utilizando firma de desarrollo; el paquete de la aplicación
 no lo instala. Duplicar no requiere instalarlo. Firma de las releases:
 [Code signing policy](CODE_SIGNING.md).
 
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/). Solicitud
+pendiente: hasta su aprobación, las releases no están firmadas.
+
 1. Descomprime el paquete Windows y abre **`WindowDeck.exe`** sin ejecutar como
    administrador. Elige **Extender escritorio** o **Duplicar pantalla principal**,
    pulsa **Iniciar** y acepta el permiso. En duplicación se utiliza únicamente
