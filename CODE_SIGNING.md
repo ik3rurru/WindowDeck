@@ -1,39 +1,42 @@
 # Code signing policy
 
-> **Estado:** solicitud a SignPath Foundation pendiente. Hasta su aprobación,
-> las releases de Windows **no están firmadas** y el driver solo se instala con
-> el certificado de desarrollo descrito en
+> **Status:** application to SignPath Foundation pending. Until it is approved,
+> Windows releases are **not signed**, and the driver can only be installed with
+> the development certificate described in
 > [driver/windows-idd/README.md](driver/windows-idd/README.md).
 
 Free code signing provided by [SignPath.io](https://about.signpath.io/),
 certificate by [SignPath Foundation](https://signpath.org/).
 
-## Qué se firma
+## What is signed
 
-Solo binarios compilados desde este repositorio por el workflow
-[Release](.github/workflows/release.yml) de GitHub Actions, nunca builds locales:
+Only binaries built from this repository by the
+[Release](.github/workflows/release.yml) GitHub Actions workflow, never local
+builds:
 
-- `WindowDeck.exe` (panel), `windowdeck-host.exe`, `windowdeck-client.exe` y
-  `windowdeck-display.exe`;
-- el driver de pantalla virtual: `WindowDeckDisplay.dll` y su catálogo
-  `WindowDeckDisplay.cat`.
+- `WindowDeck.exe` (control panel), `windowdeck-host.exe`,
+  `windowdeck-client.exe` and `windowdeck-display.exe`, from
+  `WindowDeck-VERSION-windows-x64.zip`;
+- the virtual display driver, a user-mode Indirect Display Driver (IDD):
+  `WindowDeckDisplay.dll` and its catalog `WindowDeckDisplay.cat`, from
+  `WindowDeck-VERSION-driver-x64-unsigned.zip`.
 
-FFmpeg, SDL2 y el resto de bibliotecas de terceros incluidas en el paquete se
-distribuyen tal como las publica cada proyecto y no se firman con este
-certificado. Sus licencias van en la carpeta `licenses/` del paquete.
+FFmpeg, SDL2 and the other third-party libraries shipped in the package are
+distributed as published by each project and are not signed with this
+certificate. Their licenses are in the package's `licenses/` folder.
 
 ## Roles
 
-| Rol | Miembros |
+| Role | Members |
 | --- | --- |
 | Authors (committers) | [ik3rurru](https://github.com/ik3rurru) |
 | Reviewers | [ik3rurru](https://github.com/ik3rurru) |
 | Approvers | [ik3rurru](https://github.com/ik3rurru) |
 
-Proyecto con un único mantenedor. Las contribuciones externas se revisan antes
-de fusionarse ([CONTRIBUTING.md](CONTRIBUTING.md)), y cada release se aprueba a
-mano en SignPath antes de firmarse. Toda cuenta con acceso al repositorio o a
-SignPath debe usar autenticación en dos pasos.
+Single-maintainer project. External contributions are reviewed before they are
+merged ([CONTRIBUTING.md](CONTRIBUTING.md)), and every release is approved
+manually in SignPath before it is signed. Every account with access to the
+repository or to SignPath must use two-factor authentication.
 
 ## Privacy policy
 
@@ -41,26 +44,26 @@ This program will not transfer any information to other networked systems
 unless specifically requested by the user or the person installing or
 operating it.
 
-En concreto, WindowDeck no tiene telemetría, cuentas ni servicios en la nube:
+Specifically, WindowDeck has no telemetry, accounts or cloud services:
 
-- Mientras el host está iniciado, anuncia el PC en la red local por mDNS para
-  que la Deck lo encuentre.
-- Solo transmite la pantalla a dispositivos que la persona ha emparejado
-  confirmando un código en ambas pantallas, y siempre por la red local con
-  cifrado ([seguridad](README.md#seguridad-actual)).
-- Los registros de diagnóstico se guardan en el propio equipo y solo salen de él
-  si la persona los adjunta a un issue.
+- While the host is running, it announces the PC on the local network over
+  mDNS so the Steam Deck can find it.
+- It only streams the screen to devices the user has paired by confirming a
+  code on both screens, always over the local network and encrypted
+  ([security](README.md#seguridad-actual)).
+- Diagnostic logs stay on the device and only leave it if the user attaches
+  them to an issue.
 
-Los componentes de terceros incluidos (FFmpeg, SDL2) solo codifican, decodifican
-y muestran el vídeo de esa misma conexión.
+The bundled third-party components (FFmpeg, SDL2) only encode, decode and
+display the video of that same connection.
 
-## Cambios en el sistema
+## System changes
 
-El modo Extender necesita el driver de pantalla virtual, que hoy se instala
-aparte como administrador. Al iniciar una sesión, el panel pide confirmación de
-administrador y crea reglas de firewall limitadas a redes privadas y la subred
-local. El monitor virtual solo existe durante la sesión. La
-desinstalación del driver se documenta en
+Extend mode needs the virtual display driver, which is currently installed
+separately as administrator. When a session starts, the control panel asks for
+administrator approval and creates firewall rules limited to private networks
+and the local subnet. The virtual monitor only exists during the session.
+Uninstalling the driver is documented in
 [driver/windows-idd/README.md](driver/windows-idd/README.md#desinstalar-únicamente-este-prototipo).
 
-Vulnerabilidades: [SECURITY.md](SECURITY.md).
+Vulnerabilities: [SECURITY.md](SECURITY.md).

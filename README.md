@@ -3,6 +3,17 @@
 [![CI](https://github.com/ik3rurru/WindowDeck/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ik3rurru/WindowDeck/actions/workflows/ci.yml)
 [![Flatpak](https://github.com/ik3rurru/WindowDeck/actions/workflows/flatpak.yml/badge.svg?branch=main)](https://github.com/ik3rurru/WindowDeck/actions/workflows/flatpak.yml)
 
+> **In English:** WindowDeck turns a Steam Deck into a second display for
+> Windows 11 over the local network. It either extends the desktop onto a
+> 1280 × 800 virtual monitor, created by its own user-mode Indirect Display
+> Driver (IDD, based on Microsoft's IndirectDisplay sample), or mirrors the
+> main screen without a driver. The PC encodes H.264 and the Deck decodes it
+> with VAAPI. Devices pair by confirming a six-digit code on both screens, and
+> the stream is encrypted (Noise XX). There is no telemetry and no cloud: see
+> the [code signing and privacy policy](CODE_SIGNING.md). Download from
+> [GitHub Releases](https://github.com/ik3rurru/WindowDeck/releases). The rest
+> of the documentation is in Spanish.
+
 WindowDeck convierte la Steam Deck en una segunda pantalla de Windows 11 a través
 de la red local. Permite extender el escritorio con un monitor virtual de
 1280 × 800 a 60 Hz o **duplicar la pantalla principal de Windows sin driver
