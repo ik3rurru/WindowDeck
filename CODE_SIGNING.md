@@ -1,12 +1,11 @@
 # Code signing policy
 
-> **Status:** application to SignPath Foundation pending. Until it is approved,
-> Windows releases are **not signed**, and the driver can only be installed with
-> the development certificate described in
-> [driver/windows-idd/README.md](driver/windows-idd/README.md).
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/),
-certificate by [SignPath Foundation](https://signpath.org/).
+> **Status:** Windows releases are **not signed** yet, and the driver can only
+> be installed with the development certificate described in
+> [driver/windows-idd/README.md](driver/windows-idd/README.md). This policy
+> describes how releases will be signed once a certificate is available. The
+> project plans to apply to [SignPath Foundation](https://signpath.org/) again
+> when it has wider adoption.
 
 ## What is signed
 
@@ -34,9 +33,9 @@ certificate. Their licenses are in the package's `licenses/` folder.
 | Approvers | [ik3rurru](https://github.com/ik3rurru) |
 
 Single-maintainer project. External contributions are reviewed before they are
-merged ([CONTRIBUTING.md](CONTRIBUTING.md)), and every release is approved
-manually in SignPath before it is signed. Every account with access to the
-repository or to SignPath must use two-factor authentication.
+merged ([CONTRIBUTING.md](CONTRIBUTING.md)), and every release will be
+approved manually before it is signed. Every account with access to the
+repository or to the signing service must use two-factor authentication.
 
 ## Privacy policy
 
