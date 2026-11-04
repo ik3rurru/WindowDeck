@@ -9,7 +9,7 @@ if (!(Test-Path $iddVswhere)) { throw 'Install Visual Studio 2026 Build Tools wi
 $iddVs = if ($ControlOnly) {
     & $iddVswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 } else {
-    & $iddVswhere -latest -products '*' -version '[18.0,19.0)' -requires Component.Microsoft.Windows.DriverKit.BuildTools -property installationPath
+    & $iddVswhere -latest -products '*' -version '[18.0,19.0)' -requiresAny -requires Component.Microsoft.Windows.DriverKit.BuildTools Component.Microsoft.Windows.DriverKit -property installationPath
 }
 if (!$iddVs) { throw 'Add Windows Driver Kit build tools in Visual Studio Installer (Component.Microsoft.Windows.DriverKit.BuildTools).' }
 $iddMsbuild = Join-Path $iddVs 'MSBuild/Current/Bin/amd64/MSBuild.exe'

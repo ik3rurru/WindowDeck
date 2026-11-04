@@ -26,9 +26,9 @@ jobs:
       - name: Build Windows applications and media
         shell: pwsh
         run: ./scripts/build-media.ps1 -Download
-      - name: Build display helper without installing the driver
+      - name: Build display helper and unsigned driver package
         shell: pwsh
-        run: ./driver/windows-idd/build.ps1 -ControlOnly -Toolset v143 -SdkVersion 10.0
+        run: ./driver/windows-idd/build.ps1
       - name: Package and verify
         id: package
         shell: pwsh
@@ -36,10 +36,22 @@ jobs:
           $archive = ./scripts/package-windows.ps1 -SkipBuild -Release
           ./scripts/test-windows-package.ps1 -Archive $archive
           "archive=$archive" >> $env:GITHUB_OUTPUT
+          # ponytail: unsigned until SignPath signs the DLL and catalog (CODE_SIGNING.md).
+          $version = (Select-String -Path Cargo.toml '^version = "(.*)"').Matches[0].Groups[1].Value
+          $driver = Join-Path $PWD 'target/windows-idd/WindowDeckDisplay'
+          Rename-Item (Join-Path $driver 'windowdeckdisplay.cat') 'WindowDeckDisplay.cat'
+          $files = 'WindowDeckDisplay.dll', 'WindowDeckDisplay.inf', 'WindowDeckDisplay.cat', 'LICENSE' | ForEach-Object { Join-Path $driver $_ }
+          $files | ForEach-Object { if (!(Test-Path -LiteralPath $_)) { throw "Missing driver file: $_" } }
+          # Next to the app zip so the artifact keeps both at its root.
+          $driverZip = Join-Path (Split-Path $archive) "WindowDeck-$version-driver-x64-unsigned.zip"
+          Compress-Archive -LiteralPath $files -DestinationPath $driverZip
+          "driver=$driverZip" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: WindowDeck-windows
-          path: ${{ steps.package.outputs.archive }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.driver }}
           if-no-files-found: error
 
   publish:
@@ -63,6 +75,7 @@ jobs:
           test -f "docs/releases/$RELEASE_TAG.md"
           cd target/release-assets
           test -s "WindowDeck-$version-windows-x64.zip"
+          test -s "WindowDeck-$version-driver-x64-unsigned.zip"
           test -s "WindowDeck-$version-steamdeck-x86_64.tar.gz"
           test -s WindowDeck.flatpak
           sha256sum *.zip *.tar.gz *.flatpak > SHA256SUMS.txt

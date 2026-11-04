@@ -23,7 +23,7 @@ Comprueba dos lecturas de 120 frames, terminación del host, reconexión, versi�
 
 ## Compilar y comprobar sin instalar
 
-Requisitos: Windows 11 x64 y Visual Studio 2026 Build Tools con C++ y el componente **Windows Driver Kit build tools** (`Component.Microsoft.Windows.DriverKit.BuildTools`), incluidas sus bibliotecas Spectre. La [distribución oficial WDK por NuGet](https://learn.microsoft.com/en-us/windows-hardware/drivers/install-the-wdk-using-nuget) proporciona SDK y WDK `10.0.28000.2526`; no es necesario instalar el IDE completo en el entorno comprobado.
+Requisitos: Windows 11 x64 y Visual Studio 2026 Build Tools con C++ y el componente **Windows Driver Kit build tools** (`Component.Microsoft.Windows.DriverKit.BuildTools`, o `Component.Microsoft.Windows.DriverKit` como en los runners de GitHub), incluidas sus bibliotecas Spectre. La [distribución oficial WDK por NuGet](https://learn.microsoft.com/en-us/windows-hardware/drivers/install-the-wdk-using-nuget) proporciona SDK y WDK `10.0.28000.2526`; no es necesario instalar el IDE completo en el entorno comprobado.
 
 Desde la raíz del repositorio:
 
@@ -37,6 +37,9 @@ Resultados:
 
 - `target/windows-idd/windowdeck-display.exe`: utilidad de activación y autoprueba.
 - `target/windows-idd/WindowDeckDisplay/`: DLL, INF, CAT **sin firmar** y licencia.
+
+El workflow Release compila lo mismo en GitHub Actions y publica esos cuatro
+archivos como `WindowDeck-VERSION-driver-x64-unsigned.zip`.
 
 Para repetir únicamente la autoprueba, sin privilegios de administrador ni driver instalado:
 
