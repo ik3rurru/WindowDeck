@@ -66,6 +66,17 @@ try {
     & $iddSignTool verify /pa /v /c $iddCat (Join-Path $iddOutput 'WindowDeckDisplay.inf')
     if ($LASTEXITCODE) { throw 'Catalog/INF verification failed.' }
 
+    # PnPUtil keeps a staged package with the same INF and drops the new signature,
+    # so remove the same version first. Other versions stay for recovery.
+    $iddVersion = (Select-String -LiteralPath (Join-Path $iddOutput 'WindowDeckDisplay.inf') '^DriverVer\s*=[^,]+,(.+)$').Matches[0].Groups[1].Value.Trim()
+    $iddStaged = [xml](& pnputil /enum-drivers /format xml | Out-String)
+    if ($LASTEXITCODE) { throw "PnPUtil could not list drivers: $LASTEXITCODE" }
+    $iddStaged.DocumentElement.ChildNodes | Where-Object {
+        $_.OriginalName -eq 'windowdeckdisplay.inf' -and ($_.DriverVersion -split ' ')[-1] -eq $iddVersion
+    } | ForEach-Object {
+        & pnputil /delete-driver $_.DriverName /uninstall
+        if ($LASTEXITCODE -notin @(0, 3010)) { throw "PnPUtil could not remove $($_.DriverName): $LASTEXITCODE" }
+    }
     & pnputil /add-driver (Join-Path $iddOutput 'WindowDeckDisplay.inf') /install
     $iddInstallResult = $LASTEXITCODE
     if ($iddInstallResult -notin @(0, 3010)) { throw "PnPUtil failed: $iddInstallResult" }
