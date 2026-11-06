@@ -46,7 +46,8 @@ fn main() {
         );
         // Launched from Steam there is no terminal: without a window the client
         // just vanishes. ponytail: also shown for CLI errors; Esc closes it.
-        if !error.is::<pairing::Shown>() {
+        // Tests set WINDOWDECK_NO_ERROR_WINDOW so nobody has to close it.
+        if !error.is::<pairing::Shown>() && env::var_os("WINDOWDECK_NO_ERROR_WINDOW").is_none() {
             let _ = pairing::show_error(&mut ui, &error.to_string());
         }
         std::process::exit(1);
@@ -117,15 +118,9 @@ fn run(ui: &mut Ui) -> Result<(), Box<dyn Error>> {
         if native {
             return native::run(target, options.fullscreen, options.quality, ui);
         }
-        return receive_h264_test(
-            &target,
-            options.fullscreen,
-            options.ffplay_baseline,
-            ui,
-        );
+        return receive_h264_test(&target, options.fullscreen, options.ffplay_baseline, ui);
     }
-    let (stream, session_id, width, height, _) =
-        connect_paired(&target, VideoCodec::Rgb332, ui)?;
+    let (stream, session_id, width, height, _) = connect_paired(&target, VideoCodec::Rgb332, ui)?;
     let shutdown = stream.shutdown_handle()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));
