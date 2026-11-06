@@ -37,17 +37,23 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 fn main() {
-    if let Err(error) = run() {
+    let mut ui = Ui::default();
+    if let Err(error) = run(&mut ui) {
         emit(
             Level::Error,
             "client_failed",
             &[("error", &error.to_string())],
         );
+        // Launched from Steam there is no terminal: without a window the client
+        // just vanishes. ponytail: also shown for CLI errors; Esc closes it.
+        if !error.is::<pairing::Shown>() {
+            let _ = pairing::show_error(&mut ui, &error.to_string());
+        }
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run(ui: &mut Ui) -> Result<(), Box<dyn Error>> {
     if matches!(env::args().nth(1).as_deref(), Some("--help" | "-h")) {
         println!(
             "WindowDeck client\nUso: windowdeck-client [auto | IP:PUERTO] [--fullscreen]\n     [--quality auto|deck|1080p|1440p]\n     windowdeck-client --paired-hosts | --forget-host HUELLA|all\n\nLa calidad de duplicación se negocia al conectar. Auto usa la salida visible\nal abrir el cliente, hasta 1440p. Conecta la TV antes de abrirlo.\nExtender escritorio conserva 1280x800. F11: pantalla completa; Escape: ventana.\n\nLa conexión va cifrada. La primera vez con un PC, ambos muestran un código\nde seis cifras: confírmalo en la Deck y en el panel de Windows."
@@ -97,11 +103,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let security = Arc::new(ClientSecurity::load()?);
     let mut target = Target::new(options.address.as_str(), security);
-    let mut ui = Ui::default();
     if options.address == "auto" {
         let codec = if options.h264_test { "h264" } else { "rgb332" };
         let mut browser = windowdeck_protocol::discovery::Browser::new(codec)?;
-        let Some(host) = host_picker::choose(&mut browser, &mut ui)? else {
+        let Some(host) = host_picker::choose(&mut browser, ui)? else {
             return Ok(());
         };
         target.address = format!("mdns:{}", host.identity);
@@ -110,17 +115,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     if options.h264_test {
         #[cfg(feature = "native-media")]
         if native {
-            return native::run(target, options.fullscreen, options.quality, &mut ui);
+            return native::run(target, options.fullscreen, options.quality, ui);
         }
         return receive_h264_test(
             &target,
             options.fullscreen,
             options.ffplay_baseline,
-            &mut ui,
+            ui,
         );
     }
     let (stream, session_id, width, height, _) =
-        connect_paired(&target, VideoCodec::Rgb332, &mut ui)?;
+        connect_paired(&target, VideoCodec::Rgb332, ui)?;
     let shutdown = stream.shutdown_handle()?;
     let latest = Arc::new(Mutex::new(None));
     let stopping = Arc::new(AtomicBool::new(false));

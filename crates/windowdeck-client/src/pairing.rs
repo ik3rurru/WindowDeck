@@ -236,16 +236,48 @@ pub fn pair_interactively(
     run?;
     match result {
         Ok(Outcome::Paired) => Ok(()),
-        Ok(outcome) => Err(outcome_message(outcome).into()),
-        Err(error) => Err(error.into()),
+        // The window already showed why, or the person closed it on purpose.
+        Ok(outcome) => Err(Shown(outcome_message(outcome).into()).into()),
+        Err(error) => Err(Shown(error).into()),
     }
 }
+
+/// An error the person already saw in a window; `main` only logs it.
+#[derive(Debug)]
+pub struct Shown(String);
+
+impl std::fmt::Display for Shown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for Shown {}
+
+/// Shows why the client stops and waits until the person closes the window.
+pub fn show_error(ui: &mut Ui, message: &str) -> Result<(), Box<dyn Error>> {
+    let event_loop = ui.event_loop()?;
+    let mut window = PairingWindow {
+        context: Context::new(event_loop.owned_display_handle())?,
+        surface: None,
+        window: None,
+        screen: Screen::Failed("WindowDeck se ha detenido", message.into()),
+        peer_accepted: false,
+        decide: mpsc::channel().0,
+        buttons: Vec::new(),
+        cursor: (0.0, 0.0),
+    };
+    event_loop.run_app_on_demand(&mut window)?;
+    Ok(())
+}
+
+const NOT_PAIRED: &str = "No se ha emparejado";
 
 enum Screen {
     Connecting,
     Code(Request),
     Waiting(Request),
-    Failed(String),
+    Failed(&'static str, String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -276,7 +308,7 @@ impl PairingWindow {
             (Screen::Code(_) | Screen::Waiting(_), Action::Reject) => {
                 let _ = self.decide.send(false);
             }
-            (Screen::Failed(_), _) | (Screen::Connecting, Action::Reject | Action::Close) => {
+            (Screen::Failed(..), _) | (Screen::Connecting, Action::Reject | Action::Close) => {
                 event_loop.exit();
             }
             _ => return,
@@ -386,8 +418,8 @@ impl PairingWindow {
                     self.buttons.push((cancel, Action::Reject));
                 }
             }
-            Screen::Failed(message) => {
-                canvas.centered(80, 3, canvas::WHITE, "No se ha emparejado");
+            Screen::Failed(title, message) => {
+                canvas.centered(80, 3, canvas::WHITE, title);
                 // Wrap long messages at word boundaries for the 8x8 font.
                 let columns = (width.saturating_sub(40) / 16).max(10);
                 let mut line = String::new();
@@ -427,7 +459,10 @@ impl ApplicationHandler<ClientEvent> for PairingWindow {
             let window = Rc::new(
                 event_loop.create_window(
                     Window::default_attributes()
-                        .with_title("WindowDeck - Emparejar con el PC")
+                        .with_title(match self.screen {
+                            Screen::Failed(..) => "WindowDeck",
+                            _ => "WindowDeck - Emparejar con el PC",
+                        })
                         .with_inner_size(LogicalSize::new(800, 600)),
                 )?,
             );
@@ -458,9 +493,9 @@ impl ApplicationHandler<ClientEvent> for PairingWindow {
                 return;
             }
             Update::Finished(Ok(outcome)) => {
-                self.screen = Screen::Failed(outcome_message(outcome).into())
+                self.screen = Screen::Failed(NOT_PAIRED, outcome_message(outcome).into())
             }
-            Update::Finished(Err(error)) => self.screen = Screen::Failed(error),
+            Update::Finished(Err(error)) => self.screen = Screen::Failed(NOT_PAIRED, error),
         }
         self.redraw();
     }
@@ -481,7 +516,7 @@ impl ApplicationHandler<ClientEvent> for PairingWindow {
                 match event.logical_key {
                     Key::Named(NamedKey::Enter) => self.act(Action::Accept, event_loop),
                     Key::Named(NamedKey::Escape) => {
-                        let action = if matches!(self.screen, Screen::Failed(_)) {
+                        let action = if matches!(self.screen, Screen::Failed(..)) {
                             Action::Close
                         } else {
                             Action::Reject
