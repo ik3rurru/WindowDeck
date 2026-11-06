@@ -16,7 +16,7 @@
   con `-SkipBuild`.
 - Pendiente: solicitar SignPath (mencionar que es un IDD como Virtual Display
   Driver) y volver a ejecutar `install-test.ps1` antes del 4 de diciembre.
-  `docs/pyrowave-evaluation.md` sigue sin commit, a la espera de decisión.
+- PyroWave descartado el 6 de noviembre: se mantiene H.264 y se borró la evaluación sin commit.
 
 
 ## Preparación de 0.4.1

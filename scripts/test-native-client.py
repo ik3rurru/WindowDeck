@@ -82,7 +82,7 @@ def main():
     args = parser.parse_args()
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     devices = PairedDevices(args.relay)
-    client_env = dict(os.environ, WINDOWDECK_DATA_DIR=str(devices.client_dir))
+    client_env = dict(os.environ, WINDOWDECK_DATA_DIR=str(devices.client_dir), WINDOWDECK_NO_ERROR_WINDOW="1")
     # A renderer startup failure must happen before the host can activate a display.
     with socket.socket() as unopened:
         unopened.bind(("127.0.0.1", 0))
